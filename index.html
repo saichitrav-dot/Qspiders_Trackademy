@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RecTrack v2 — Production Pipeline UX</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --line:#e8eaee; --line2:#eef0f3;
+    --ink:#161a22; --muted:#69707d; --faint:#9aa1ad;
+    --brand:#4f46e5; --brand-2:#0d9488;
+    --green:#16a34a; --green-bg:#e7f6ec; --blue:#2563eb; --blue-bg:#e6effe;
+    --amber:#c2790a; --amber-bg:#fdf2dc; --red:#dc2626; --red-bg:#fdeaea;
+    --grey:#6b7280; --grey-bg:#f1f2f4; --violet:#7c3aed; --violet-bg:#efe9fc;
+    --side:#12141d; --side-ink:#c9ccd6; --side-mut:#777d8c;
+    --shadow:0 1px 2px rgba(16,20,30,.04), 0 4px 14px rgba(16,20,30,.06);
+    --s1:#6366f1; --s2:#8b5cf6; --s3:#0ea5e9; --s4:#0d9488; --s5:#f59e0b; --s6:#ec4899; --s7:#16a34a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0c0e13;font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:var(--ink);-webkit-font-smoothing:antialiased}
+  .canvas{padding:54px 40px 90px}
+  .canvas-head{max-width:1320px;margin:0 auto 26px;color:#e7e9ee}
+  .canvas-head h1{font-size:23px;font-weight:800;margin:0 0 6px;letter-spacing:-.3px}
+  .canvas-head p{margin:0;color:#8b90a0;font-size:13.5px;line-height:1.65}
+  .dot{width:9px;height:9px;border-radius:50%}
+  .stage-legend{max-width:1320px;margin:0 auto;background:#11141c;border:1px solid #20242e;border-radius:14px;padding:14px 16px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .stage-legend .s{display:inline-flex;align-items:center;gap:7px;color:#cfd3dd;font-size:11.5px;font-weight:600;background:#181c25;border:1px solid #262b36;padding:5px 10px;border-radius:8px}
+  .stage-legend .arrow{color:#4b5060;font-weight:700}
+  .stage-legend .gate{box-shadow:inset 0 0 0 1px #3a3320}
+
+  .frame-label{max-width:1320px;margin:46px auto 11px;display:flex;align-items:center;gap:10px;color:#9aa0b0;font-size:12.5px;font-weight:600}
+  .frame-label .num{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:#5b5bd6;color:#fff;font-size:11px;font-weight:700}
+  .frame-label .role{margin-left:6px;background:#1c2030;border:1px solid #2a3042;color:#aab0c2;font-size:10.5px;font-weight:700;padding:3px 9px;border-radius:20px;text-transform:uppercase;letter-spacing:.4px}
+  .frame-label .tag{margin-left:auto;color:#666c7d;font-weight:500}
+  .frame{max-width:1320px;margin:0 auto;background:var(--bg);border-radius:16px;overflow:hidden;box-shadow:0 30px 60px -20px rgba(0,0,0,.55);border:1px solid #1c1f29}
+
+  .app{display:grid;grid-template-columns:236px 1fr;min-height:760px;position:relative}
+  .side{background:var(--side);padding:18px 14px;color:var(--side-ink)}
+  .brand{display:flex;align-items:center;gap:10px;padding:6px 8px 16px}
+  .brand .logo{width:30px;height:30px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#0d9488);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:15px}
+  .brand b{font-size:15.5px;color:#fff;font-weight:700}
+  .brand small{display:block;color:var(--side-mut);font-size:9.5px;font-weight:700;letter-spacing:1px;text-transform:uppercase}
+  .nav a{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:9px;color:var(--side-ink);text-decoration:none;font-size:13px;font-weight:500;margin-bottom:2px;cursor:default}
+  .nav a svg{width:17px;height:17px;opacity:.8}
+  .nav a.active{background:rgba(99,102,241,.16);color:#fff}
+  .nav a.active svg{opacity:1;color:#a5b4fc}
+  .nav a .badge{margin-left:auto;background:#dc2626;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px}
+  .nav a .badge.amber{background:var(--amber)}
+  .nav-sec{font-size:10px;text-transform:uppercase;letter-spacing:.7px;color:var(--side-mut);padding:14px 10px 7px;font-weight:600}
+  .side-foot{position:absolute;bottom:16px;width:208px;display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;background:rgba(255,255,255,.04)}
+  .side-foot .ava{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#f472b6,#a855f7);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px}
+  .side-foot small{display:block;color:var(--side-mut);font-size:10.5px}
+  .side-foot b{font-size:12.5px;color:#fff;font-weight:600}
+
+  .main{display:flex;flex-direction:column;min-width:0}
+  .topbar{height:60px;background:var(--card);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px;padding:0 22px}
+  .search{flex:1;max-width:380px;display:flex;align-items:center;gap:9px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:8px 12px;color:var(--faint);font-size:13px}
+  .search svg{width:15px;height:15px}
+  .top-actions{margin-left:auto;display:flex;align-items:center;gap:12px;color:var(--muted)}
+  .seg{display:flex;background:var(--bg);border:1px solid var(--line);border-radius:9px;overflow:hidden;font-size:12px;font-weight:600}
+  .seg span{padding:6px 11px;color:var(--muted)}
+  .seg span.on{background:var(--brand);color:#fff}
+  .icon-btn{position:relative;width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--card);display:flex;align-items:center;justify-content:center}
+  .icon-btn svg{width:16px;height:16px}
+  .icon-btn .ping{position:absolute;top:-3px;right:-3px;width:8px;height:8px;border-radius:50%;background:#dc2626;border:2px solid #fff}
+
+  .content{padding:22px;overflow:auto}
+  .page-head{display:flex;align-items:flex-end;gap:14px;margin-bottom:18px}
+  .page-head h2{margin:0;font-size:21px;font-weight:800;letter-spacing:-.4px}
+  .page-head .sub{color:var(--muted);font-size:13px;margin-top:3px}
+  .ctrls{margin-left:auto;display:flex;gap:9px}
+  .select{display:inline-flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:8px 12px;font-size:12.5px;font-weight:500;color:var(--ink)}
+  .select svg{width:13px;height:13px;color:var(--faint)}
+  .btn-primary{display:inline-flex;align-items:center;gap:7px;background:var(--brand);color:#fff;border:none;border-radius:9px;padding:8px 14px;font-size:12.5px;font-weight:600;font-family:inherit}
+  .btn-ghost{display:inline-flex;align-items:center;gap:7px;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:8px 13px;font-size:12.5px;font-weight:600;color:var(--ink)}
+
+  .grid{display:grid;gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow)}
+  .card.p{padding:18px}
+  .card-h{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .card-h h3{margin:0;font-size:14px;font-weight:700}
+  .card-h .more{margin-left:auto;color:var(--faint);font-size:12px;font-weight:600}
+
+  .kpis4{grid-template-columns:repeat(4,1fr)} .kpis3{grid-template-columns:repeat(3,1fr)}
+  .kpi{padding:16px 18px}
+  .kpi .label{font-size:11.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;display:flex;align-items:center;gap:8px}
+  .kpi .ic{width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center}
+  .kpi .ic svg{width:15px;height:15px}
+  .kpi .big{font-size:28px;font-weight:800;letter-spacing:-1px;margin:11px 0 3px}
+  .kpi .big span{font-size:15px;color:var(--faint);font-weight:600}
+  .kpi .delta{font-size:12px;font-weight:600}
+  .up{color:var(--green)} .down{color:var(--red)}
+
+  .chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:3px 9px;border-radius:20px;white-space:nowrap}
+  .chip .d{width:7px;height:7px;border-radius:50%}
+  .c-green{background:var(--green-bg);color:var(--green)} .c-green .d{background:var(--green)}
+  .c-blue{background:var(--blue-bg);color:var(--blue)} .c-blue .d{background:var(--blue)}
+  .c-amber{background:var(--amber-bg);color:var(--amber)} .c-amber .d{background:var(--amber)}
+  .c-red{background:var(--red-bg);color:var(--red)} .c-red .d{background:var(--red)}
+  .c-grey{background:var(--grey-bg);color:var(--grey)} .c-grey .d{background:var(--grey)}
+  .c-violet{background:var(--violet-bg);color:var(--violet)} .c-violet .d{background:var(--violet)}
+
+  .sla{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:3px 8px;border-radius:7px}
+  .sla svg{width:12px;height:12px}
+  .sla-ok{background:var(--green-bg);color:var(--green)}
+  .sla-due{background:var(--amber-bg);color:var(--amber)}
+  .sla-over{background:var(--red-bg);color:var(--red)}
+
+  .bar{height:9px;border-radius:6px;background:#edeef1;overflow:hidden;display:flex}
+  .bar i{display:block;height:100%}
+
+  .ring{width:128px;height:128px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:conic-gradient(var(--brand) calc(var(--p)*1%), #edeef1 0);}
+  .ring .in{width:98px;height:98px;border-radius:50%;background:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .ring .in b{font-size:26px;font-weight:800;letter-spacing:-1px}
+  .ring .in small{font-size:10.5px;color:var(--muted);font-weight:600}
+
+  .funnel .fr{display:flex;align-items:center;gap:12px;margin-bottom:11px}
+  .funnel .fr .nm{width:120px;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px}
+  .funnel .fr .nm i{width:9px;height:9px;border-radius:3px;display:inline-block}
+  .funnel .fr .bar{flex:1}
+  .funnel .fr .ct{width:78px;text-align:right;font-size:12px;font-weight:700;font-variant-numeric:tabular-nums}
+  .funnel .fr .ct small{color:var(--faint);font-weight:500}
+
+  .pipe{display:flex;align-items:flex-start;gap:0;margin:6px 0}
+  .pipe .step{flex:1;text-align:center;position:relative}
+  .pipe .step .od{width:30px;height:30px;border-radius:50%;margin:0 auto;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:12px;position:relative;z-index:2}
+  .pipe .step .ln{position:absolute;top:15px;left:-50%;width:100%;height:3px;background:#e3e6ea;z-index:1}
+  .pipe .step:first-child .ln{display:none}
+  .pipe .step .lab{font-size:10.5px;font-weight:600;margin-top:7px;color:var(--ink)}
+  .pipe .step .meta{font-size:9.5px;color:var(--faint);margin-top:2px}
+  .pipe .step.done .ln{background:var(--green)}
+  .pipe .step.now .ln{background:linear-gradient(90deg,var(--green),var(--blue))}
+
+  .kanban{display:flex;gap:12px;overflow-x:auto;padding-bottom:6px}
+  .kcol{min-width:184px;flex:1;background:#fff;border:1px solid var(--line);border-radius:13px;display:flex;flex-direction:column;max-height:560px}
+  .kcol .kh{padding:11px 12px;border-bottom:1px solid var(--line2);display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;position:sticky;top:0;background:#fff;border-radius:13px 13px 0 0}
+  .kcol .kh .kdot{width:9px;height:9px;border-radius:3px}
+  .kcol .kh .kct{margin-left:auto;background:var(--bg);border:1px solid var(--line);border-radius:20px;font-size:10.5px;padding:1px 8px;color:var(--muted)}
+  .kbody{padding:9px;display:flex;flex-direction:column;gap:8px;overflow-y:auto}
+  .kcard{border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+  .kcard .t{font-size:12px;font-weight:700;line-height:1.3}
+  .kcard .s{font-size:10.5px;color:var(--muted);margin-top:2px}
+  .kcard .f{display:flex;align-items:center;gap:6px;margin-top:8px}
+  .kcard .ava-s{width:20px;height:20px;font-size:9px}
+
+  table{width:100%;border-collapse:collapse}
+  thead th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--faint);font-weight:600;padding:11px 14px;border-bottom:1px solid var(--line)}
+  tbody td{padding:12px 14px;border-bottom:1px solid var(--line2);font-size:13px}
+  tbody tr:last-child td{border-bottom:none}
+  .ava-s{width:26px;height:26px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:700;margin-right:8px;vertical-align:middle}
+  .who{display:inline-flex;align-items:center;font-weight:600}
+  .link{color:var(--brand);font-weight:600}
+  .mono{font-variant-numeric:tabular-nums;font-weight:600}
+  .subj b{font-weight:700} .subj small{color:var(--muted)}
+
+  .trow{display:flex;align-items:center;gap:12px;padding:10px 6px;border-bottom:1px solid var(--line2);font-size:13px}
+  .trow .nm{display:flex;align-items:center;gap:9px;min-width:340px}
+  .trow .nm .tw{font-weight:700}
+  .trow .bar{flex:1}
+  .trow .pct{width:46px;text-align:right;font-weight:700;font-size:12px}
+  .ind1{padding-left:6px} .ind2{padding-left:30px} .ind3{padding-left:54px} .ind4{padding-left:78px}
+  .caret{color:var(--faint);width:14px;display:inline-block}
+  .lvl-badge{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;padding:2px 7px;border-radius:6px;background:var(--bg);border:1px solid var(--line);color:var(--muted)}
+
+  .scrim{position:absolute;inset:0;background:rgba(16,20,30,.34)}
+  .drawer{position:absolute;top:0;right:0;bottom:0;width:440px;background:#fff;border-left:1px solid var(--line);box-shadow:-20px 0 50px -20px rgba(0,0,0,.3);display:flex;flex-direction:column}
+  .dh{padding:18px 20px;border-bottom:1px solid var(--line)}
+  .dh .x{float:right;color:var(--faint)}
+  .dh h3{margin:0 0 4px;font-size:16px;font-weight:800}
+  .dh .m{color:var(--muted);font-size:12.5px}
+  .db{padding:18px 20px;overflow:auto;flex:1}
+  .video{aspect-ratio:16/9;border-radius:12px;background:linear-gradient(135deg,#1f2430,#11141c);display:flex;align-items:center;justify-content:center;color:#fff;margin-bottom:8px}
+  .video .play{width:50px;height:50px;border-radius:50%;background:rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.3)}
+  .qa .item{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line2);font-size:13px;font-weight:500}
+  .box{width:18px;height:18px;border-radius:5px;border:1.7px solid #cfd3da;display:flex;align-items:center;justify-content:center}
+  .box.on{background:var(--green);border-color:var(--green);color:#fff} .box svg{width:11px;height:11px}
+  .df{padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:9px}
+  .df .btn-primary{flex:1;justify-content:center}
+  .auto{margin:14px 0;padding:11px 13px;border-radius:11px;background:var(--bg);border:1px solid var(--line2);font-size:12px}
+  .auto .row{display:flex;gap:8px;align-items:center;margin:5px 0}
+  .audit-line{font-size:11px;color:var(--faint);padding:10px 20px;border-top:1px solid var(--line2)}
+
+  .auto-strip{display:flex;align-items:center;gap:14px;background:linear-gradient(100deg,#eef0ff,#eafaf6);border:1px solid #e0e5ff;border-radius:14px;padding:13px 16px;margin-bottom:16px;flex-wrap:wrap}
+  .auto-strip .badge2{display:inline-flex;align-items:center;gap:9px;font-weight:800;font-size:13px;color:var(--brand)}
+  .auto-strip .badge2 .spark{width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,#6366f1,#0d9488);display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px}
+  .auto-strip .sep{width:1px;height:30px;background:#dde2f3}
+  .auto-strip .stat{font-size:12px;color:var(--muted)}
+  .auto-strip .stat b{display:block;font-size:18px;color:var(--ink);font-weight:800;line-height:1.15}
+  .rule{padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:#fff;margin-bottom:11px;box-shadow:var(--shadow)}
+  .rule .rh{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .rule .rh b{font-size:13.5px}
+  .thr{font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:7px;background:var(--bg);border:1px solid var(--line2);color:var(--muted)}
+  .toggle{margin-left:auto;width:38px;height:22px;border-radius:12px;background:var(--brand);position:relative;flex-shrink:0}
+  .toggle::after{content:"";position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:#fff}
+  .flow{display:flex;align-items:center;gap:7px;font-size:12px;flex-wrap:wrap;line-height:1.7}
+  .flow .when{color:var(--muted)}
+  .flow .then{display:inline-flex;align-items:center;gap:5px;background:var(--green-bg);color:var(--green);font-weight:600;padding:3px 8px;border-radius:8px}
+  .flow .then.b{background:var(--blue-bg);color:var(--blue)} .flow .then.r{background:var(--red-bg);color:var(--red)} .flow .then.v{background:var(--violet-bg);color:var(--violet)}
+  .flow svg{width:12px;height:12px}
+  .feed .fi{display:flex;gap:11px;padding:11px 0;border-bottom:1px solid var(--line2)}
+  .feed .fi:last-child{border:none}
+  .feed .fi .ic2{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .feed .fi .ic2 svg{width:14px;height:14px}
+  .feed .fi .tx{font-size:12.5px;font-weight:600}
+  .feed .fi .tx small{display:block;color:var(--faint);font-size:11px;font-weight:500;margin-top:2px}
+  .feed .ts{margin-left:auto;font-size:10.5px;color:var(--faint);white-space:nowrap}
+
+  .board{overflow:hidden;border-radius:14px;border:1px solid var(--line);background:#fff}
+  .board-grid{display:grid;grid-template-columns:64px repeat(6,1fr)}
+  .bh{background:#fafbfc;border-bottom:1px solid var(--line);border-right:1px solid var(--line2);padding:10px 8px;font-size:11px;font-weight:600;color:var(--muted);text-align:center}
+  .bh.room{text-align:left;color:var(--ink)}
+  .rlabel{border-right:1px solid var(--line);border-bottom:1px solid var(--line2);padding:0 8px;display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;background:#fafbfc}
+  .rlabel .rd{width:8px;height:8px;border-radius:50%}
+  .cell{border-right:1px solid var(--line2);border-bottom:1px solid var(--line2);padding:6px;min-height:60px}
+  .ev{height:100%;border-radius:9px;padding:6px 8px;font-size:11px;font-weight:700;border:1px solid transparent}
+  .ev small{display:block;font-weight:500;font-size:10px;opacity:.85;margin-top:2px}
+  .ev.green{background:var(--green-bg);color:#0f7a37;border-color:#cfecd8}
+  .ev.blue{background:var(--blue-bg);color:#1d4ed8;border-color:#cfe0fb}
+  .ev.amber{background:var(--amber-bg);color:#9a5d04;border-color:#f4e2b8}
+  .ev.red{background:var(--red-bg);color:#b91c1c;border-color:#f6d2d2}
+  .ev.violet{background:var(--violet-bg);color:#6d28d9;border-color:#e0d4fb}
+  .ev.open{background:repeating-linear-gradient(45deg,#fafbfc,#fafbfc 6px,#f2f3f5 6px,#f2f3f5 12px);color:var(--faint);border:1px dashed #dfe2e7;display:flex;align-items:center;justify-content:center;font-weight:600}
+
+  .note{padding:12px 14px;border-radius:11px;background:var(--bg);border:1px solid var(--line2);font-size:12.5px;color:var(--muted)}
+  .foot{max-width:1320px;margin:50px auto 0;color:#5a6072;font-size:12px;text-align:center}
+
+  .slotcard{border:1px solid var(--line);border-radius:14px;padding:15px 16px;display:flex;align-items:center;gap:14px;margin-bottom:11px;background:#fff;box-shadow:var(--shadow)}
+  .slotcard .tm{text-align:center;min-width:70px}
+  .slotcard .tm b{font-size:15px;font-weight:800;display:block}
+  .slotcard .tm small{font-size:10.5px;color:var(--faint)}
+  .slotcard .info{flex:1}
+  .slotcard .info b{font-size:14px}
+  .slotcard .info small{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-dash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></symbol>
+  <symbol id="i-pipe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6M3 12h12M3 17h18"/><circle cx="13" cy="7" r="2"/><circle cx="19" cy="12" r="2"/></symbol>
+  <symbol id="i-board" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 9v12"/></symbol>
+  <symbol id="i-tree" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="5" rx="1"/><rect x="14" y="9" width="7" height="5" rx="1"/><rect x="14" y="16" width="7" height="5" rx="1"/><path d="M6.5 8v8h7.5M6.5 12h7.5"/></symbol>
+  <symbol id="i-scissors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88M14.47 14.48 20 20M8.12 8.12 12 12"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-hour" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14M5 2h14M17 22v-4.2a2 2 0 0 0-.6-1.4L12 12l-4.4 4.4a2 2 0 0 0-.6 1.4V22M7 2v4.2a2 2 0 0 0 .6 1.4L12 12l4.4-4.4a2 2 0 0 0 .6-1.4V2"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11"/></symbol>
+  <symbol id="i-report" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="m19 9-5 5-4-4-3 3"/></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol>
+  <symbol id="i-rec" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="14" height="14" rx="2"/><path d="m22 8-6 4 6 4V8z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-arr" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+  <symbol id="i-dl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.3M21 4v5h-5"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></symbol>
+</svg>
+
+<div class="canvas">
+  <div class="canvas-head">
+    <h1>🎬 RecTrack v2 — Content Production Pipeline</h1>
+    <p>Complete UX mockups (static). Five roles: <b>Program Head</b> · Trainer · Editing team · Reviewer · Management.
+       7-stage pipeline per sub-topic, 4 studios, 8:30–20:30 slots — with a hard <b>2-day turnaround window (SLA)</b> tracked on every item.<br/>
+       Each frame is labelled with the role that uses it. 12 screens.</p>
+  </div>
+  <div class="stage-legend">
+    <span style="color:#9aa0b0;font-size:11px;font-weight:700;margin-right:4px">PIPELINE</span>
+    <span class="s"><span class="dot" style="background:var(--s1)"></span>1 PPT</span><span class="arrow">›</span>
+    <span class="s"><span class="dot" style="background:var(--s2)"></span>2 Script</span><span class="arrow">›</span>
+    <span class="s"><span class="dot" style="background:var(--s3)"></span>3 Presentation</span><span class="arrow">›</span>
+    <span class="s"><span class="dot" style="background:var(--s4)"></span>4 Shooting</span><span class="arrow">›</span>
+    <span class="s gate"><span class="dot" style="background:var(--s5)"></span>5 Shoot Review ⚑</span><span class="arrow">›</span>
+    <span class="s"><span class="dot" style="background:var(--s6)"></span>6 Editing</span><span class="arrow">›</span>
+    <span class="s gate"><span class="dot" style="background:var(--s7)"></span>7 Final Review ⚑</span>
+    <span style="margin-left:auto;color:#777d8c;font-size:11px">⚑ = approval gate</span>
+  </div>
+
+  <!-- 1. COMMAND CENTER -->
+  <div class="frame-label"><span class="num">1</span> Program Command Center <span class="role">Program Head</span><span class="tag">the daily cockpit</span></div>
+  <div class="frame"><div class="app" data-role="ph" data-active="dash">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search subject, sub-topic, trainer…</div>
+        <div class="top-actions"><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>Good morning, Priya</h2><div class="sub">Program Head · Wed 3 Jun 2026 · 09:12 · JAVA Full stack program</div></div>
+          <div class="ctrls"><span class="select">This week <svg><use href="#i-chev"/></svg></span><span class="btn-ghost"><svg width="13" height="13"><use href="#i-dl"/></svg> Snapshot</span></div></div>
+        <div class="auto-strip">
+          <div class="badge2"><span class="spark">⚡</span> Autopilot today</div><div class="sep"></div>
+          <div class="stat"><b>42</b> reminders</div><div class="sep"></div>
+          <div class="stat"><b>61</b> auto-QA'd</div><div class="sep"></div>
+          <div class="stat"><b>7</b> SLA alerts</div><div class="sep"></div>
+          <div class="stat" style="color:var(--green)"><b style="color:var(--green)">9</b> exceptions need you</div>
+        </div>
+        <div class="grid" style="grid-template-columns:240px 1fr;margin-bottom:16px">
+          <div class="card p" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px">
+            <div class="ring" style="--p:58"><div class="in"><b>58%</b><small>weighted complete</small></div></div>
+            <div style="font-size:11.5px;color:var(--muted);text-align:center">308 sub-topics · Core Java<br/>1,180 / 2,156 stage-points done</div>
+          </div>
+          <div class="card p">
+            <div class="card-h"><h3>Pipeline — where the 308 sub-topics are</h3><span class="more">by stage</span></div>
+            <div class="funnel">
+              <div class="fr"><div class="nm"><i style="background:var(--s1)"></i>PPT</div><div class="bar"><i style="width:96%;background:var(--s1)"></i></div><div class="ct">296 <small>96%</small></div></div>
+              <div class="fr"><div class="nm"><i style="background:var(--s2)"></i>Script</div><div class="bar"><i style="width:82%;background:var(--s2)"></i></div><div class="ct">252 <small>82%</small></div></div>
+              <div class="fr"><div class="nm"><i style="background:var(--s3)"></i>Presentation</div><div class="bar"><i style="width:70%;background:var(--s3)"></i></div><div class="ct">215 <small>70%</small></div></div>
+              <div class="fr"><div class="nm"><i style="background:var(--s4)"></i>Shooting</div><div class="bar"><i style="width:54%;background:var(--s4)"></i></div><div class="ct">166 <small>54%</small></div></div>
+              <div class="fr"><div class="nm"><i style="background:var(--s5)"></i>Shoot Review</div><div class="bar"><i style="width:44%;background:var(--s5)"></i></div><div class="ct">135 <small>44%</small></div></div>
+              <div class="fr"><div class="nm"><i style="background:var(--s6)"></i>Editing</div><div class="bar"><i style="width:31%;background:var(--s6)"></i></div><div class="ct">95 <small>31%</small></div></div>
+              <div class="fr"><div class="nm"><i style="background:var(--s7)"></i>Final Review</div><div class="bar"><i style="width:24%;background:var(--s7)"></i></div><div class="ct">74 <small>24%</small></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="grid" style="grid-template-columns:1fr 1fr">
+          <div class="card p">
+            <div class="card-h"><h3>⏱ Breaching the 2-day window</h3><span class="chip c-red"><span class="d"></span>7 at risk</span></div>
+            <table><tbody>
+              <tr><td class="subj"><b>Operators</b><small> · Editing</small></td><td><span class="who"><span class="ava-s" style="background:#ec4899">E</span>Editor</span></td><td><span class="sla sla-over"><svg><use href="#i-hour"/></svg>over 1d</span></td><td style="text-align:right"><span class="link">Open →</span></td></tr>
+              <tr><td class="subj"><b>For Loop</b><small> · Shoot Review</small></td><td><span class="who"><span class="ava-s" style="background:#7c3aed">R</span>Review</span></td><td><span class="sla sla-due"><svg><use href="#i-hour"/></svg>due today</span></td><td style="text-align:right"><span class="link">Open →</span></td></tr>
+              <tr><td class="subj"><b>Arrays intro</b><small> · Shooting</small></td><td><span class="who"><span class="ava-s" style="background:#ef4444">A</span>Akash</span></td><td><span class="sla sla-over"><svg><use href="#i-hour"/></svg>missed slot</span></td><td style="text-align:right"><span class="link">Reassign →</span></td></tr>
+            </tbody></table>
+          </div>
+          <div class="card p">
+            <div class="card-h"><h3>Today's shooting · 4 studios</h3><span class="more">24 slots</span></div>
+            <div style="display:flex;gap:10px;margin-bottom:6px"><div class="bar" style="flex:1"><i style="width:82%;background:var(--s4)"></i></div></div>
+            <div style="font-size:12px;color:var(--muted);margin-bottom:12px">18 of 24 slots booked · 4 recorded · 2 in progress</div>
+            <div style="display:flex;gap:14px;flex-wrap:wrap">
+              <span class="chip c-green"><span class="d"></span>Studio 1 · busy</span>
+              <span class="chip c-blue"><span class="d"></span>Studio 2 · recording</span>
+              <span class="chip c-amber"><span class="d"></span>Studio 3 · idle 11:00</span>
+              <span class="chip c-green"><span class="d"></span>Studio 4 · busy</span>
+            </div>
+            <div class="note" style="margin-top:14px">Quality this week: <b style="color:var(--ink)">Excellent 41% · Good 47% · Avg 10% · Poor 2%</b> · rework 4.1%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 2. PIPELINE KANBAN -->
+  <div class="frame-label"><span class="num">2</span> Production Pipeline <span class="role">Program Head</span><span class="tag">every sub-topic, every stage — drag to advance</span></div>
+  <div class="frame"><div class="app" data-role="ph" data-active="pipe">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search…</div>
+        <div class="top-actions"><div class="seg"><span class="on">Board</span><span>Table</span></div><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>Production Pipeline</h2><div class="sub">Core Java · 308 sub-topics flowing through 7 stages</div></div>
+          <div class="ctrls"><span class="select">Chapter: All <svg><use href="#i-chev"/></svg></span><span class="select">Owner: All <svg><use href="#i-chev"/></svg></span></div></div>
+        <div class="kanban">
+          <div class="kcol"><div class="kh"><span class="kdot" style="background:var(--s1)"></span>PPT<span class="kct">12</span></div><div class="kbody">
+            <div class="kcard"><div class="t">Inheritance</div><div class="s">OOPS · Chap 2</div><div class="f"><span class="ava-s" style="background:#3b82f6">M</span><span class="sla sla-ok"><svg><use href="#i-hour"/></svg>2d</span></div></div>
+            <div class="kcard"><div class="t">Polymorphism</div><div class="s">OOPS · Chap 2</div><div class="f"><span class="ava-s" style="background:#3b82f6">M</span><span class="sla sla-ok"><svg><use href="#i-hour"/></svg>2d</span></div></div>
+          </div></div>
+          <div class="kcol"><div class="kh"><span class="kdot" style="background:var(--s2)"></span>Script<span class="kct">18</span></div><div class="kbody">
+            <div class="kcard"><div class="t">Encapsulation</div><div class="s">OOPS · Chap 2</div><div class="f"><span class="ava-s" style="background:#a855f7">P</span><span class="sla sla-due"><svg><use href="#i-hour"/></svg>today</span></div></div>
+          </div></div>
+          <div class="kcol"><div class="kh"><span class="kdot" style="background:var(--s3)"></span>Presentation<span class="kct">9</span></div><div class="kbody">
+            <div class="kcard"><div class="t">Interfaces</div><div class="s">Advanced Java</div><div class="f"><span class="ava-s" style="background:#14b8a6">K</span><span class="sla sla-ok"><svg><use href="#i-hour"/></svg>1d</span></div></div>
+          </div></div>
+          <div class="kcol"><div class="kh"><span class="kdot" style="background:var(--s4)"></span>Shooting<span class="kct">14</span></div><div class="kbody">
+            <div class="kcard"><div class="t">For Loop</div><div class="s">Fundamentals</div><div class="f"><span class="ava-s" style="background:#ef4444">A</span><span class="sla sla-due"><svg><use href="#i-hour"/></svg>today</span></div></div>
+            <div class="kcard"><div class="t">While Loop</div><div class="s">Fundamentals</div><div class="f"><span class="ava-s" style="background:#f59e0b">M</span><span class="sla sla-ok"><svg><use href="#i-hour"/></svg>2d</span></div></div>
+            <div class="kcard" style="border-color:#f6d2d2"><div class="t">Arrays intro</div><div class="s">Fundamentals · missed</div><div class="f"><span class="ava-s" style="background:#ef4444">A</span><span class="sla sla-over"><svg><use href="#i-hour"/></svg>over</span></div></div>
+          </div></div>
+          <div class="kcol"><div class="kh"><span class="kdot" style="background:var(--s5)"></span>Shoot Review<span class="kct">8</span></div><div class="kbody">
+            <div class="kcard"><div class="t">Decision Stmt</div><div class="s">awaiting QC</div><div class="f"><span class="ava-s" style="background:#7c3aed">R</span><span class="sla sla-due"><svg><use href="#i-hour"/></svg>today</span></div></div>
+          </div></div>
+          <div class="kcol"><div class="kh"><span class="kdot" style="background:var(--s6)"></span>Editing<span class="kct">11</span></div><div class="kbody">
+            <div class="kcard" style="border-color:#f6d2d2"><div class="t">Operators</div><div class="s">Fundamentals</div><div class="f"><span class="ava-s" style="background:#ec4899">E</span><span class="sla sla-over"><svg><use href="#i-hour"/></svg>over 1d</span></div></div>
+            <div class="kcard"><div class="t">Variables</div><div class="s">Fundamentals</div><div class="f"><span class="ava-s" style="background:#ec4899">E</span><span class="sla sla-ok"><svg><use href="#i-hour"/></svg>1d</span></div></div>
+          </div></div>
+          <div class="kcol"><div class="kh"><span class="kdot" style="background:var(--s7)"></span>Final Review<span class="kct">6</span></div><div class="kbody">
+            <div class="kcard"><div class="t">Print</div><div class="s">Fundamentals</div><div class="f"><span class="ava-s" style="background:#7c3aed">R</span><span class="sla sla-ok"><svg><use href="#i-hour"/></svg>2d</span></div></div>
+            <div class="kcard" style="border-color:#cfecd8;background:#f5fbf7"><div class="t">Keywords ✓</div><div class="s">approved · done</div><div class="f"><span class="chip c-green"><span class="d"></span>Published</span></div></div>
+          </div></div>
+        </div>
+        <div class="note" style="margin-top:14px">Cards carry the <b>SLA window</b> (green ≥1 day left · amber due today · red breached). Drag a card right to advance a stage — the next owner is auto-notified.</div>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 3. STUDIO BOARD -->
+  <div class="frame-label"><span class="num">3</span> Live Studio Board <span class="role">Program Head</span><span class="tag">the Shooting stage · 4 studios × slots</span></div>
+  <div class="frame"><div class="app" data-role="ph" data-active="board">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search…</div>
+        <div class="top-actions"><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>Live Studio Board</h2><div class="sub">Wed 3 Jun · 4 studios · 08:30–20:30 (2-hour slots)</div></div>
+          <div class="ctrls"><span class="select">◀ Today ▶</span><span class="select">All shifts <svg><use href="#i-chev"/></svg></span></div></div>
+        <div class="board">
+          <div class="board-grid">
+            <div class="bh room">Studio</div><div class="bh">08:30</div><div class="bh">10:30</div><div class="bh">12:30</div><div class="bh">14:30</div><div class="bh">16:30</div><div class="bh">18:30 →</div>
+            <div class="rlabel"><span class="rd" style="background:#6366f1"></span>S1</div>
+            <div class="cell"><div class="ev green">Print<small>Madhu ✓</small></div></div>
+            <div class="cell"><div class="ev green">Variable<small>Madhu ✓</small></div></div>
+            <div class="cell"><div class="ev blue">For Loop<small>Akash ●rec</small></div></div>
+            <div class="cell"><div class="ev open">open</div></div>
+            <div class="cell"><div class="ev green">Keywords<small>Madhu ✓</small></div></div>
+            <div class="cell"><div class="ev amber">Values<small>Madhu ◷</small></div></div>
+            <div class="rlabel"><span class="rd" style="background:#0d9488"></span>S2</div>
+            <div class="cell"><div class="ev green">Operators<small>Leo ✓</small></div></div>
+            <div class="cell"><div class="ev blue">Arith Op<small>Leo ●rec</small></div></div>
+            <div class="cell"><div class="ev red">Arrays<small>Akash · missed</small></div></div>
+            <div class="cell"><div class="ev open">open</div></div>
+            <div class="cell"><div class="ev green">While Loop<small>Leo ✓</small></div></div>
+            <div class="cell"><div class="ev green">Do-While<small>Leo ✓</small></div></div>
+            <div class="rlabel"><span class="rd" style="background:#f59e0b"></span>S3</div>
+            <div class="cell"><div class="ev green">Inherit<small>Amy ✓</small></div></div>
+            <div class="cell"><div class="ev open">idle</div></div>
+            <div class="cell"><div class="ev open">open</div></div>
+            <div class="cell"><div class="ev violet">Polymorph<small>Amy · rework</small></div></div>
+            <div class="cell"><div class="ev green">Abstract<small>Amy ✓</small></div></div>
+            <div class="cell"><div class="ev open">open</div></div>
+            <div class="rlabel"><span class="rd" style="background:#ec4899"></span>S4</div>
+            <div class="cell"><div class="ev green">Interface<small>Pamy ✓</small></div></div>
+            <div class="cell"><div class="ev green">Exception<small>Pamy ✓</small></div></div>
+            <div class="cell"><div class="ev blue">Collections<small>Pamy ●rec</small></div></div>
+            <div class="cell"><div class="ev green">Threads<small>Kiran ✓</small></div></div>
+            <div class="cell"><div class="ev green">Generics<small>Kiran ✓</small></div></div>
+            <div class="cell"><div class="ev amber">Streams<small>Kiran ◷</small></div></div>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+          <span class="chip c-green"><span class="d"></span>Recorded ✓</span><span class="chip c-blue"><span class="d"></span>Recording ●</span>
+          <span class="chip c-amber"><span class="d"></span>Pending QC ◷</span><span class="chip c-violet"><span class="d"></span>Rework</span>
+          <span class="chip c-red"><span class="d"></span>Missed → auto-reschedules in 2-day window</span><span class="chip c-grey"><span class="d"></span>Open</span>
+        </div>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- ROOM ADHERENCE & DEFAULTERS -->
+  <div class="frame-label"><span class="num">★</span> Daily Room Adherence &amp; Defaulters <span class="role">Program Head</span><span class="tag">scarce rooms · end-of-day defaulter data</span></div>
+  <div class="frame"><div class="app" data-role="ph" data-active="adherence">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search…</div>
+        <div class="top-actions"><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>Daily Room Adherence</h2><div class="sub">Wed 3 Jun · 4 studios · 08:30–20:30 · end-of-day view</div></div>
+          <div class="ctrls"><span class="select">◀ Today ▶</span><span class="btn-ghost"><svg width="13" height="13"><use href="#i-dl"/></svg> Export defaulters</span></div></div>
+
+        <div class="grid kpis4" style="margin-bottom:16px">
+          <div class="card kpi"><div class="label"><span class="ic" style="background:var(--blue-bg);color:var(--blue)"><svg><use href="#i-rec"/></svg></span>Active recordings</div><div class="big">2</div><div class="delta" style="color:var(--muted)">live now</div></div>
+          <div class="card kpi"><div class="label"><span class="ic" style="background:var(--green-bg);color:var(--green)"><svg><use href="#i-check"/></svg></span>Completed today</div><div class="big">14</div><div class="delta up">on track</div></div>
+          <div class="card kpi"><div class="label"><span class="ic" style="background:var(--red-bg);color:var(--red)"><svg><use href="#i-warn"/></svg></span>Delayed today</div><div class="big" style="color:var(--red)">3</div><div class="delta down">needs action</div></div>
+          <div class="card kpi"><div class="label"><span class="ic" style="background:var(--grey-bg);color:var(--grey)"><svg><use href="#i-clock"/></svg></span>Upcoming slots</div><div class="big">5</div><div class="delta" style="color:var(--muted)">rest of day</div></div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:1fr 1.5fr">
+          <div class="card p"><div class="card-h"><h3>Room utilisation</h3><span class="more">booked ÷ available</span></div>
+            <div class="funnel">
+              <div class="fr"><div class="nm" style="width:64px">Studio 1</div><div class="bar"><i style="width:86%;background:var(--brand)"></i></div><div class="ct" style="width:42px">86%</div></div>
+              <div class="fr"><div class="nm" style="width:64px">Studio 2</div><div class="bar"><i style="width:78%;background:var(--brand)"></i></div><div class="ct" style="width:42px">78%</div></div>
+              <div class="fr"><div class="nm" style="width:64px">Studio 3</div><div class="bar"><i style="width:50%;background:var(--amber)"></i></div><div class="ct" style="width:42px">50%</div></div>
+              <div class="fr"><div class="nm" style="width:64px">Studio 4</div><div class="bar"><i style="width:73%;background:var(--brand)"></i></div><div class="ct" style="width:42px">73%</div></div>
+            </div>
+            <div class="note" style="margin-top:12px">⚠ Studio 3 idle <b>11:00–13:00</b> — a scarce room going unused. Reassign a pending shoot here.</div>
+          </div>
+
+          <div class="card p"><div class="card-h"><h3>Defaulters — slots not honoured</h3><span class="chip c-red"><span class="d"></span>3 today</span></div>
+            <table>
+              <thead><tr><th>Slot</th><th>Studio</th><th>Trainer</th><th>Sub-topic</th><th>What happened</th><th>Reason</th><th style="text-align:right">Action</th></tr></thead>
+              <tbody>
+                <tr><td class="mono">10:30</td><td>S2</td><td><span class="who"><span class="ava-s" style="background:#ef4444">A</span>Akash</span></td><td>Arrays intro</td><td><span class="chip c-red"><span class="d"></span>Missed</span></td><td>Given other training</td><td style="text-align:right"><span class="link">Reschedule →</span></td></tr>
+                <tr><td class="mono">14:30</td><td>S1</td><td><span class="who"><span class="ava-s" style="background:#14b8a6">L</span>Leo</span></td><td>For Loop</td><td><span class="chip c-red"><span class="d"></span>No-show</span></td><td>Swapped by others</td><td style="text-align:right"><span class="link">Reassign →</span></td></tr>
+                <tr><td class="mono">12:30</td><td>S4</td><td><span class="who"><span class="ava-s" style="background:#8b5cf6">P</span>Pamy</span></td><td>Threads</td><td><span class="chip c-amber"><span class="d"></span>Late 25m</span></td><td>—</td><td style="text-align:right"><span class="link">Note →</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="note" style="margin-top:16px">End of day, one export names every default with its reason. <b>Today: 88% adherence · 2 studios under-used · biggest leak = "given other training" (2 slots).</b> Exactly the data to manage the program and have the conversation.</div>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 4. CONTENT EXPLORER -->
+  <div class="frame-label"><span class="num">4</span> Content Explorer <span class="role">Program Head</span><span class="tag">curriculum tree · completion rolled up</span></div>
+  <div class="frame"><div class="app" data-role="ph" data-active="content">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search…</div>
+        <div class="top-actions"><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>Content Explorer</h2><div class="sub">Subject → Chapter → Topic → Sub-topic · weighted completion at every level</div></div>
+          <div class="ctrls"><span class="select">Subject: Core Java <svg><use href="#i-chev"/></svg></span><span class="select">Status: All <svg><use href="#i-chev"/></svg></span></div></div>
+        <div class="card p">
+          <div class="trow"><div class="nm ind1"><span class="caret">▾</span><span class="lvl-badge">Subject</span><span class="tw">Core Java</span></div><div class="bar"><i style="width:58%;background:var(--brand)"></i></div><div class="pct">58%</div></div>
+          <div class="trow"><div class="nm ind2"><span class="caret">▾</span><span class="lvl-badge">Chapter</span><span class="tw">Fundamentals of Java</span></div><div class="bar"><i style="width:74%;background:var(--green)"></i></div><div class="pct">74%</div></div>
+          <div class="trow"><div class="nm ind3"><span class="caret">▾</span><span class="lvl-badge">Topic</span>Variables</div><div class="bar"><i style="width:92%;background:var(--green)"></i></div><div class="pct">92%</div></div>
+          <div class="trow"><div class="nm ind4"><span class="caret"> </span>Print · Variable · Anatomy · Values · Keywords</div><div class="bar"><i style="width:100%;background:var(--green)"></i></div><div class="pct">100%</div></div>
+          <div class="trow"><div class="nm ind3"><span class="caret">▾</span><span class="lvl-badge">Topic</span>Operator</div><div class="bar"><i style="width:48%;background:var(--amber)"></i></div><div class="pct">48%</div></div>
+          <div class="trow"><div class="nm ind4"><span class="caret"> </span>Arithmetic · Relational · Logical · Bitwise (6 of 12 done)</div><div class="bar"><i style="width:50%;background:var(--amber)"></i></div><div class="pct">50%</div></div>
+          <div class="trow"><div class="nm ind2"><span class="caret">▸</span><span class="lvl-badge">Chapter</span><span class="tw">OOPS</span></div><div class="bar"><i style="width:46%;background:var(--amber)"></i></div><div class="pct">46%</div></div>
+          <div class="trow"><div class="nm ind2"><span class="caret">▸</span><span class="lvl-badge">Chapter</span><span class="tw">Advanced Java</span></div><div class="bar"><i style="width:38%;background:var(--red)"></i></div><div class="pct">38%</div></div>
+        </div>
+        <div class="note" style="margin-top:14px">Every % is <b>computed</b> from the 7 stage weights — never typed. Click any sub-topic to open its pipeline (next screen).</div>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 5. CONTENT ITEM DETAIL -->
+  <div class="frame-label"><span class="num">5</span> Sub-topic Pipeline (detail) <span class="role">Program Head</span><span class="tag">one item's full journey</span></div>
+  <div class="frame"><div class="app" data-role="ph" data-active="content">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search…</div>
+        <div class="top-actions"><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>Operators <span style="color:var(--faint);font-weight:600;font-size:15px">· Fundamentals of Java</span></h2><div class="sub">Sub-topic ST00031 · planned trainer Madhu · target window 2 days</div></div>
+          <div class="ctrls"><span class="chip c-amber" style="font-size:13px;padding:6px 12px"><span class="d"></span>In Editing · 48% complete</span></div></div>
+        <div class="card p" style="margin-bottom:16px">
+          <div class="pipe">
+            <div class="step done"><div class="ln"></div><div class="od" style="background:var(--s1)"><svg width="13" height="13"><use href="#i-check"/></svg></div><div class="lab">PPT</div><div class="meta">Madhu · 1 Jun</div></div>
+            <div class="step done"><div class="ln"></div><div class="od" style="background:var(--s2)"><svg width="13" height="13"><use href="#i-check"/></svg></div><div class="lab">Script</div><div class="meta">Madhu · 1 Jun</div></div>
+            <div class="step done"><div class="ln"></div><div class="od" style="background:var(--s3)"><svg width="13" height="13"><use href="#i-check"/></svg></div><div class="lab">Presentation</div><div class="meta">Madhu · 2 Jun</div></div>
+            <div class="step done"><div class="ln"></div><div class="od" style="background:var(--s4)"><svg width="13" height="13"><use href="#i-check"/></svg></div><div class="lab">Shooting</div><div class="meta">S2 · 2 Jun</div></div>
+            <div class="step done"><div class="ln"></div><div class="od" style="background:var(--s5)"><svg width="13" height="13"><use href="#i-check"/></svg></div><div class="lab">Shoot Review</div><div class="meta">Approved</div></div>
+            <div class="step now"><div class="ln"></div><div class="od" style="background:var(--s6);box-shadow:0 0 0 4px #fce7f3"><svg width="13" height="13"><use href="#i-scissors"/></svg></div><div class="lab">Editing</div><div class="meta" style="color:var(--red)">over 1d ⚠</div></div>
+            <div class="step"><div class="ln"></div><div class="od" style="background:#e3e6ea;color:#9aa1ad">7</div><div class="lab" style="color:var(--faint)">Final Review</div><div class="meta">—</div></div>
+          </div>
+        </div>
+        <div class="grid" style="grid-template-columns:1fr 1fr">
+          <div class="card p"><div class="card-h"><h3>Video versions</h3></div>
+            <table><tbody>
+              <tr><td><b>v2</b> <span class="chip c-amber" style="margin-left:4px"><span class="d"></span>editing</span></td><td>Good</td><td>49:12</td><td><span class="link">▷ open</span></td></tr>
+              <tr><td><b>v1</b> <span class="chip c-violet" style="margin-left:4px"><span class="d"></span>reshot</span></td><td>Average</td><td>46:30</td><td><span class="link">▷ open</span></td></tr>
+            </tbody></table>
+            <div class="note" style="margin-top:12px">File: gdrive://core-java/operators_v2.mp4</div>
+          </div>
+          <div class="card p"><div class="card-h"><h3>History &amp; SLA</h3></div>
+            <div class="feed">
+              <div class="fi"><span class="ic2" style="background:var(--red-bg);color:var(--red)"><svg><use href="#i-hour"/></svg></span><div class="tx">Editing breached 2-day window<small>auto-escalated to Program Head</small></div><span class="ts">today</span></div>
+              <div class="fi"><span class="ic2" style="background:var(--green-bg);color:var(--green)"><svg><use href="#i-check"/></svg></span><div class="tx">Shoot Review approved<small>by Reviewer One</small></div><span class="ts">2 Jun</span></div>
+              <div class="fi"><span class="ic2" style="background:var(--blue-bg);color:var(--blue)"><svg><use href="#i-rec"/></svg></span><div class="tx">Recorded in Studio 2<small>Madhu · v2 after reshoot</small></div><span class="ts">2 Jun</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 6. EDITING QUEUE -->
+  <div class="frame-label"><span class="num">6</span> Editing Queue <span class="role">Editing team</span><span class="tag">pick up · edit · push to review</span></div>
+  <div class="frame"><div class="app" data-role="editor" data-active="edit">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search…</div>
+        <div class="top-actions"><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>Editing Queue</h2><div class="sub">11 videos waiting · sorted by SLA window (most urgent first)</div></div>
+          <div class="ctrls"><span class="select">Mine <svg><use href="#i-chev"/></svg></span></div></div>
+        <div class="grid kpis3" style="margin-bottom:16px">
+          <div class="card kpi"><div class="label">In my queue</div><div class="big">11</div></div>
+          <div class="card kpi"><div class="label">Over window</div><div class="big" style="color:var(--red)">2</div></div>
+          <div class="card kpi"><div class="label">Done this week</div><div class="big" style="color:var(--green)">17</div></div>
+        </div>
+        <div class="card" style="overflow:hidden">
+          <table>
+            <thead><tr><th>Sub-topic video</th><th>From</th><th>Quality</th><th>SLA window</th><th>Status</th><th style="text-align:right">Action</th></tr></thead>
+            <tbody>
+              <tr><td class="subj"><b>Operators</b> <small>v2</small></td><td>Shoot Review ✓</td><td>Good</td><td><span class="sla sla-over"><svg><use href="#i-hour"/></svg>over 1d</span></td><td><span class="chip c-blue"><span class="d"></span>In progress</span></td><td style="text-align:right"><span class="link">Resume →</span></td></tr>
+              <tr><td class="subj"><b>Decision Stmt</b> <small>v1</small></td><td>Shoot Review ✓</td><td>Excellent</td><td><span class="sla sla-due"><svg><use href="#i-hour"/></svg>due today</span></td><td><span class="chip c-grey"><span class="d"></span>Not started</span></td><td style="text-align:right"><span class="link"><b>Start →</b></span></td></tr>
+              <tr><td class="subj"><b>For Loop</b> <small>v1</small></td><td>Shoot Review ✓</td><td>Good</td><td><span class="sla sla-ok"><svg><use href="#i-hour"/></svg>1d left</span></td><td><span class="chip c-grey"><span class="d"></span>Not started</span></td><td style="text-align:right"><span class="link">Start →</span></td></tr>
+              <tr><td class="subj"><b>Variables</b> <small>v1</small></td><td>Shoot Review ✓</td><td>Excellent</td><td><span class="sla sla-ok"><svg><use href="#i-hour"/></svg>2d left</span></td><td><span class="chip c-violet"><span class="d"></span>Rework</span></td><td style="text-align:right"><span class="link">Re-open →</span></td></tr>
+              <tr><td class="subj"><b>Keywords</b> <small>v1</small></td><td>Shoot Review ✓</td><td>Good</td><td><span class="sla sla-ok"><svg><use href="#i-hour"/></svg>2d left</span></td><td><span class="chip c-green"><span class="d"></span>Done → review</span></td><td style="text-align:right"><span class="link">View →</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 7. REVIEW & APPROVAL -->
+  <div class="frame-label"><span class="num">7</span> Review &amp; Approval <span class="role">Reviewer</span><span class="tag">two gates: Shoot Review + Final Review</span></div>
+  <div class="frame"><div class="app" data-role="reviewer" data-active="review">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search…</div>
+        <div class="top-actions"><div class="seg"><span class="on">Shoot Review</span><span>Final Review</span></div><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>Review &amp; Approval</h2><div class="sub">Gate 1 · Shooting Review — 8 awaiting · Gate 2 · Final Review — 6 awaiting</div></div></div>
+        <div class="card" style="overflow:hidden">
+          <table>
+            <thead><tr><th>Sub-topic</th><th>Gate</th><th>Recorded by</th><th>Quality</th><th>SLA</th><th style="text-align:right">Action</th></tr></thead>
+            <tbody>
+              <tr><td class="subj"><b>For Loop</b></td><td>Shoot Review</td><td>Akash</td><td>Good</td><td><span class="sla sla-due"><svg><use href="#i-hour"/></svg>today</span></td><td style="text-align:right"><span class="link"><b>Review →</b></span></td></tr>
+              <tr><td class="subj"><b>Decision Stmt</b></td><td>Shoot Review</td><td>Madhu</td><td>Excellent</td><td><span class="sla sla-ok"><svg><use href="#i-hour"/></svg>1d</span></td><td style="text-align:right"><span class="link">Review →</span></td></tr>
+              <tr><td class="subj"><b>Print</b></td><td>Final Review</td><td>Madhu</td><td>Good</td><td><span class="sla sla-ok"><svg><use href="#i-hour"/></svg>2d</span></td><td style="text-align:right"><span class="link">Review →</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="scrim"></div>
+    <div class="drawer">
+      <div class="dh"><span class="x">✕</span><h3>For Loop · Shoot Review</h3><div class="m">Akash · Studio 1 · v1 · 47:20 · <span style="color:var(--amber);font-weight:700">SLA due today</span></div></div>
+      <div class="db">
+        <div class="video"><div class="play"><svg width="20" height="20"><use href="#i-play"/></svg></div></div>
+        <div class="auto"><b style="font-size:11px;text-transform:uppercase;color:var(--muted)">Auto-checks</b>
+          <div class="row" style="color:var(--green)"><svg width="14" height="14"><use href="#i-check"/></svg> Audio clear · full slot covered</div>
+          <div class="row" style="color:var(--amber)"><svg width="14" height="14"><use href="#i-warn"/></svg> Silence 02:40–03:10</div>
+          <div class="row" style="color:var(--green)"><svg width="14" height="14"><use href="#i-check"/></svg> Subject tag matches schedule</div>
+        </div>
+        <b style="font-size:11px;text-transform:uppercase;color:var(--muted)">Reviewer checklist</b>
+        <div class="qa">
+          <div class="item"><span class="box on"><svg><use href="#i-check"/></svg></span>Content accurate to script</div>
+          <div class="item"><span class="box on"><svg><use href="#i-check"/></svg></span>Audio &amp; video quality OK</div>
+          <div class="item"><span class="box"></span>Screen / code legible</div>
+        </div>
+      </div>
+      <div class="df"><button class="btn-primary"><svg width="14" height="14"><use href="#i-check"/></svg> Approve → Editing</button>
+        <button class="btn-ghost"><svg width="14" height="14"><use href="#i-redo"/></svg> Reshoot</button></div>
+      <div class="audit-line">Audit · v1 uploaded 2 Jun 14:10 · opened by Reviewer One 09:30</div>
+    </div>
+  </div></div>
+
+  <!-- 8. SLA & DELAYS -->
+  <div class="frame-label"><span class="num">8</span> SLA &amp; Delays — the 2-day window <span class="role">Program Head</span><span class="tag">★ never miss the window</span></div>
+  <div class="frame"><div class="app" data-role="ph" data-active="sla">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search…</div>
+        <div class="top-actions"><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>SLA &amp; Delays</h2><div class="sub">Every stage has a 2-day turnaround window. This is the early-warning board.</div></div>
+          <div class="ctrls"><span class="select">All stages <svg><use href="#i-chev"/></svg></span><span class="btn-ghost"><svg width="13" height="13"><use href="#i-dl"/></svg> Export</span></div></div>
+        <div class="grid kpis4" style="margin-bottom:16px">
+          <div class="card kpi"><div class="label"><span class="ic" style="background:var(--green-bg);color:var(--green)"><svg><use href="#i-check"/></svg></span>On-window</div><div class="big">91<span>%</span></div><div class="delta up">▲ +3%</div></div>
+          <div class="card kpi"><div class="label"><span class="ic" style="background:var(--amber-bg);color:var(--amber)"><svg><use href="#i-hour"/></svg></span>Due today</div><div class="big">12</div></div>
+          <div class="card kpi"><div class="label"><span class="ic" style="background:var(--red-bg);color:var(--red)"><svg><use href="#i-warn"/></svg></span>Breached</div><div class="big" style="color:var(--red)">7</div></div>
+          <div class="card kpi"><div class="label"><span class="ic" style="background:var(--blue-bg);color:var(--blue)"><svg><use href="#i-redo"/></svg></span>Reschedules</div><div class="big">4</div></div>
+        </div>
+        <div class="card" style="overflow:hidden">
+          <table>
+            <thead><tr><th>Sub-topic</th><th>Stuck at stage</th><th>Owner</th><th>In stage</th><th>Window</th><th>Reason</th><th style="text-align:right">Action</th></tr></thead>
+            <tbody>
+              <tr><td class="subj"><b>Operators</b></td><td><span class="chip c-violet"><span class="d"></span>Editing</span></td><td>Editor One</td><td class="mono">3 days</td><td><span class="sla sla-over"><svg><use href="#i-hour"/></svg>over 1d</span></td><td>editor overloaded</td><td style="text-align:right"><span class="link">Reassign →</span></td></tr>
+              <tr><td class="subj"><b>Arrays intro</b></td><td><span class="chip c-blue"><span class="d"></span>Shooting</span></td><td>Akash</td><td class="mono">2 days</td><td><span class="sla sla-over"><svg><use href="#i-hour"/></svg>missed slot</span></td><td>trainer on leave</td><td style="text-align:right"><span class="link">Reschedule →</span></td></tr>
+              <tr><td class="subj"><b>Polymorphism</b></td><td><span class="chip c-amber"><span class="d"></span>Shoot Review</span></td><td>Reviewer One</td><td class="mono">1 day</td><td><span class="sla sla-due"><svg><use href="#i-hour"/></svg>due today</span></td><td>awaiting QC</td><td style="text-align:right"><span class="link">Nudge →</span></td></tr>
+              <tr><td class="subj"><b>For Loop</b></td><td><span class="chip c-amber"><span class="d"></span>Shoot Review</span></td><td>Reviewer One</td><td class="mono">1 day</td><td><span class="sla sla-due"><svg><use href="#i-hour"/></svg>due today</span></td><td>—</td><td style="text-align:right"><span class="link">Nudge →</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note" style="margin-top:14px">When an item is <b>1 day from breaching</b>, Autopilot auto-nudges the owner; <b>at breach</b> it escalates to the Program Head and logs a delay-day. Missed shooting slots auto-propose the next open slot <b>inside the 2-day window</b>.</div>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 9. PEOPLE -->
+  <div class="frame-label"><span class="num">9</span> People &amp; Productivity <span class="role">Program Head</span><span class="tag">trainers · editors · reviewers</span></div>
+  <div class="frame"><div class="app" data-role="ph" data-active="people">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search…</div>
+        <div class="top-actions"><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>People &amp; Productivity</h2><div class="sub">By role · this week · output, on-time-to-window, rework</div></div>
+          <div class="ctrls"><span class="select">Role: All <svg><use href="#i-chev"/></svg></span><span class="select">This week <svg><use href="#i-chev"/></svg></span></div></div>
+        <div class="card" style="overflow:hidden">
+          <table>
+            <thead><tr><th>Person</th><th>Role</th><th>Shift / studio</th><th>Output</th><th>On-window</th><th>Rework</th><th>Trend</th></tr></thead>
+            <tbody>
+              <tr><td><span class="who"><span class="ava-s" style="background:#f59e0b">M</span>Madhu</span></td><td><span class="chip c-blue"><span class="d"></span>Trainer</span></td><td>AM · S1</td><td class="mono">41 shot</td><td style="color:var(--green)">95%</td><td>3%</td><td><svg width="70" height="26" viewBox="0 0 70 26"><polyline points="2,20 14,14 26,10 38,6 50,9 62,5" fill="none" stroke="#16a34a" stroke-width="2"/></svg></td></tr>
+              <tr><td><span class="who"><span class="ava-s" style="background:#ef4444">A</span>Akash</span></td><td><span class="chip c-blue"><span class="d"></span>Trainer</span></td><td>AM · S2</td><td class="mono">29 shot</td><td style="color:var(--red)">71%</td><td>12%</td><td><svg width="70" height="26" viewBox="0 0 70 26"><polyline points="2,10 14,15 26,14 38,20 50,12 62,19" fill="none" stroke="#dc2626" stroke-width="2"/></svg></td></tr>
+              <tr><td><span class="who"><span class="ava-s" style="background:#14b8a6">L</span>Leo</span></td><td><span class="chip c-blue"><span class="d"></span>Trainer</span></td><td>PM · S2</td><td class="mono">34 shot</td><td style="color:var(--green)">90%</td><td>5%</td><td><svg width="70" height="26" viewBox="0 0 70 26"><polyline points="2,18 14,14 26,10 38,12 50,8 62,7" fill="none" stroke="#16a34a" stroke-width="2"/></svg></td></tr>
+              <tr><td><span class="who"><span class="ava-s" style="background:#ec4899">E</span>Editor One</span></td><td><span class="chip c-violet"><span class="d"></span>Editor</span></td><td>Full day</td><td class="mono">23 edited</td><td style="color:var(--amber)">82%</td><td>7%</td><td><svg width="70" height="26" viewBox="0 0 70 26"><polyline points="2,16 14,12 26,14 38,10 50,13 62,9" fill="none" stroke="#c2790a" stroke-width="2"/></svg></td></tr>
+              <tr><td><span class="who"><span class="ava-s" style="background:#7c3aed">R</span>Reviewer One</span></td><td><span class="chip c-amber"><span class="d"></span>Reviewer</span></td><td>Full day</td><td class="mono">38 reviewed</td><td style="color:var(--green)">94%</td><td>—</td><td><svg width="70" height="26" viewBox="0 0 70 26"><polyline points="2,14 14,12 26,9 38,11 50,7 62,6" fill="none" stroke="#16a34a" stroke-width="2"/></svg></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="note" style="margin-top:14px">"On-window" = % of their items completed inside the 2-day SLA. Akash is auto-flagged (71% &lt; 85% threshold) and surfaced for a coaching conversation.</div>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 10. AUTOPILOT -->
+  <div class="frame-label"><span class="num">10</span> KPI Autopilot <span class="role">Program Head</span><span class="tag">rules that enforce the KPIs &amp; the window</span></div>
+  <div class="frame"><div class="app" data-role="ph" data-active="auto">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search…</div>
+        <div class="top-actions"><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>KPI Autopilot</h2><div class="sub">Set each rule once — the system reminds, reschedules, flags &amp; escalates. Priya only sees exceptions.</div></div>
+          <div class="ctrls"><span class="btn-primary">+ New rule</span></div></div>
+        <div class="auto-strip">
+          <div class="badge2"><span class="spark">⚡</span> Today</div><div class="sep"></div>
+          <div class="stat"><b>42</b> reminders</div><div class="sep"></div>
+          <div class="stat"><b>61</b> auto-QA'd</div><div class="sep"></div>
+          <div class="stat"><b>3</b> auto-reschedules</div><div class="sep"></div>
+          <div class="stat"><b>2</b> escalations</div><div class="sep"></div>
+          <div class="stat" style="color:var(--green)"><b style="color:var(--green)">94%</b> handled without Priya</div>
+        </div>
+        <div class="grid" style="grid-template-columns:1.25fr 1fr">
+          <div>
+            <div class="card-h"><h3>Active rules</h3><span class="more">6 enabled</span></div>
+            <div class="rule"><div class="rh"><b>⏱ 2-day window guard</b><span class="thr">every stage</span><span class="toggle"></span></div>
+              <div class="flow"><span class="when">1 day before breach →</span><span class="then b"><svg><use href="#i-bell"/></svg>nudge owner</span><span class="when">· at breach →</span><span class="then r"><svg><use href="#i-arr"/></svg>escalate to Program Head</span></div></div>
+            <div class="rule"><div class="rh"><b>🎥 Missed slot recovery</b><span class="thr">shooting</span><span class="toggle"></span></div>
+              <div class="flow"><span class="when">If a slot is missed →</span><span class="then"><svg><use href="#i-redo"/></svg>auto-propose next open slot in window</span><span class="then b"><svg><use href="#i-bell"/></svg>notify trainer + PH</span></div></div>
+            <div class="rule"><div class="rh"><b>🎬 Auto-QA on upload</b><span class="thr">rework ≤ 5%</span><span class="toggle"></span></div>
+              <div class="flow"><span class="when">On every upload →</span><span class="then"><svg><use href="#i-check"/></svg>check audio · length · tag</span><span class="then v"><svg><use href="#i-redo"/></svg>fail → reshoot</span></div></div>
+            <div class="rule"><div class="rh"><b>✂ Editing backlog</b><span class="thr">queue ≤ 10</span><span class="toggle"></span></div>
+              <div class="flow"><span class="when">If editing queue &gt; 10 →</span><span class="then r"><svg><use href="#i-arr"/></svg>alert PH to add capacity</span></div></div>
+            <div class="rule"><div class="rh"><b>📈 Person performance</b><span class="thr">on-window ≥ 85%</span><span class="toggle"></span></div>
+              <div class="flow"><span class="when">If anyone drops below →</span><span class="then r"><svg><use href="#i-arr"/></svg>flag for coaching</span></div></div>
+            <div class="rule"><div class="rh"><b>🔔 Pre-slot reminder</b><span class="thr">15 min before</span><span class="toggle"></span></div>
+              <div class="flow"><span class="when">Before each slot →</span><span class="then b"><svg><use href="#i-bell"/></svg>notify trainer (studio + sub-topic)</span></div></div>
+          </div>
+          <div class="card p feed">
+            <div class="card-h"><h3>Automation activity</h3><span class="chip c-green"><span class="d"></span>live</span></div>
+            <div class="fi"><span class="ic2" style="background:var(--red-bg);color:var(--red)"><svg><use href="#i-arr"/></svg></span><div class="tx">Escalated: Operators editing breached window<small>to Program Head</small></div><span class="ts">11:30</span></div>
+            <div class="fi"><span class="ic2" style="background:var(--blue-bg);color:var(--blue)"><svg><use href="#i-redo"/></svg></span><div class="tx">Auto-rescheduled Arrays intro<small>missed S2 10:30 → S3 14:30 (in window)</small></div><span class="ts">11:05</span></div>
+            <div class="fi"><span class="ic2" style="background:var(--amber-bg);color:var(--amber)"><svg><use href="#i-bell"/></svg></span><div class="tx">Nudged Reviewer One ×2<small>For Loop &amp; Polymorphism due today</small></div><span class="ts">10:40</span></div>
+            <div class="fi"><span class="ic2" style="background:var(--violet-bg);color:var(--violet)"><svg><use href="#i-redo"/></svg></span><div class="tx">Auto-reshoot: Polymorphism v1<small>silence gap &gt; 45s</small></div><span class="ts">09:50</span></div>
+            <div class="fi"><span class="ic2" style="background:var(--blue-bg);color:var(--blue)"><svg><use href="#i-bell"/></svg></span><div class="tx">42 pre-slot reminders sent<small>whole roster</small></div><span class="ts">07:45</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 11. MANAGEMENT -->
+  <div class="frame-label"><span class="num">11</span> Management Overview <span class="role">Management</span><span class="tag">read-only · executive · forecast-driven</span></div>
+  <div class="frame"><div class="app" data-role="mgmt" data-active="report">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search subject…</div>
+        <div class="top-actions"><div class="icon-btn"><svg><use href="#i-bell"/></svg></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>Management Overview</h2><div class="sub">JAVA Full stack program · 100 subjects · May 2026 · all teams</div></div>
+          <div class="ctrls"><span class="select">Program: JAVA Full stack <svg><use href="#i-chev"/></svg></span><span class="select">Month: May <svg><use href="#i-chev"/></svg></span><span class="btn-primary"><svg width="13" height="13"><use href="#i-dl"/></svg> Export PDF</span></div></div>
+
+        <div class="grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:16px">
+          <div class="card p"><div class="label" style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.3px">Program completion</div><div class="big" style="font-size:25px;font-weight:800;margin:9px 0 6px">58%</div><div class="bar"><i style="width:58%;background:var(--brand)"></i></div><div style="font-size:11px;color:var(--green);font-weight:700;margin-top:7px">▲ 6% vs Apr</div></div>
+          <div class="card p"><div class="label" style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.3px">Forecast finish</div><div class="big" style="font-size:25px;font-weight:800;margin:9px 0 8px">21 Aug</div><span class="chip c-red"><span class="d"></span>4 days behind</span></div>
+          <div class="card p"><div class="label" style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.3px">On-window SLA</div><div class="big" style="font-size:25px;font-weight:800;margin:9px 0 6px">91%</div><div class="bar"><i style="width:91%;background:var(--green)"></i></div><div style="font-size:11px;color:var(--green);font-weight:700;margin-top:7px">▲ 3% vs Apr</div></div>
+          <div class="card p"><div class="label" style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.3px">Quality (Exc+Good)</div><div class="big" style="font-size:25px;font-weight:800;margin:9px 0 6px">88%</div><div class="bar"><i style="width:88%;background:var(--s3)"></i></div><div style="font-size:11px;color:var(--muted);font-weight:600;margin-top:7px">rework 4.1%</div></div>
+          <div class="card p"><div class="label" style="font-size:11px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.3px">Throughput</div><div class="big" style="font-size:25px;font-weight:800;margin:9px 0 8px">92<span style="font-size:14px;color:var(--faint)">/wk</span></div><span class="chip c-amber"><span class="d"></span>need 110/wk</span></div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:1.55fr 1fr;margin-bottom:16px">
+          <div class="card p"><div class="card-h"><h3>Subjects at a glance</h3><span class="more">100 subjects · sorted by risk</span></div>
+            <table>
+              <thead><tr><th>Subject</th><th>Items</th><th>Completion</th><th>On-win</th><th>At risk</th><th style="text-align:right">Forecast</th></tr></thead>
+              <tbody>
+                <tr><td class="subj"><b>Microservices</b></td><td class="mono">120</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="width:80px"><i style="width:22%;background:var(--red)"></i></div><span class="mono">22%</span></div></td><td>80%</td><td><span style="color:var(--red);font-weight:700">9</span></td><td style="text-align:right"><span class="chip c-red"><span class="d"></span>behind</span></td></tr>
+                <tr><td class="subj"><b>Advanced Java</b></td><td class="mono">142</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="width:80px"><i style="width:38%;background:var(--red)"></i></div><span class="mono">38%</span></div></td><td>84%</td><td><span style="color:var(--red);font-weight:700">11</span></td><td style="text-align:right"><span class="chip c-red"><span class="d"></span>behind</span></td></tr>
+                <tr><td class="subj"><b>REST APIs</b></td><td class="mono">58</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="width:80px"><i style="width:49%;background:var(--amber)"></i></div><span class="mono">49%</span></div></td><td>88%</td><td><span style="color:var(--amber);font-weight:700">4</span></td><td style="text-align:right"><span class="chip c-amber"><span class="d"></span>on track</span></td></tr>
+                <tr><td class="subj"><b>Core Java</b></td><td class="mono">308</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="width:80px"><i style="width:58%;background:var(--brand)"></i></div><span class="mono">58%</span></div></td><td>91%</td><td><span style="color:var(--amber);font-weight:700">7</span></td><td style="text-align:right"><span class="chip c-amber"><span class="d"></span>on track</span></td></tr>
+                <tr><td class="subj"><b>Spring Boot</b></td><td class="mono">96</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="width:80px"><i style="width:67%;background:var(--green)"></i></div><span class="mono">67%</span></div></td><td>93%</td><td>2</td><td style="text-align:right"><span class="chip c-green"><span class="d"></span>ahead</span></td></tr>
+                <tr><td class="subj"><b>Selenium</b></td><td class="mono">64</td><td><div style="display:flex;align-items:center;gap:8px"><div class="bar" style="width:80px"><i style="width:81%;background:var(--green)"></i></div><span class="mono">81%</span></div></td><td>96%</td><td>0</td><td style="text-align:right"><span class="chip c-green"><span class="d"></span>ahead</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="card p"><div class="card-h"><h3>Completion vs forecast</h3><span class="more">to 17 Aug target</span></div>
+            <svg width="100%" height="170" viewBox="0 0 320 170" preserveAspectRatio="none">
+              <line x1="0" y1="30" x2="320" y2="30" stroke="#eef0f3"/><line x1="0" y1="80" x2="320" y2="80" stroke="#eef0f3"/><line x1="0" y1="130" x2="320" y2="130" stroke="#eef0f3"/>
+              <line x1="276" y1="8" x2="276" y2="150" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="4 3"/>
+              <text x="272" y="20" font-size="10" fill="#dc2626" text-anchor="end" font-family="Inter">target 17 Aug</text>
+              <polyline points="10,140 70,124 130,104 190,84" fill="none" stroke="#4f46e5" stroke-width="3" stroke-linecap="round"/>
+              <polyline points="190,84 250,58 312,34" fill="none" stroke="#4f46e5" stroke-width="2.5" stroke-dasharray="5 4" opacity=".55"/>
+              <circle cx="190" cy="84" r="4" fill="#4f46e5"/><circle cx="312" cy="34" r="4" fill="#4f46e5" opacity=".55"/>
+            </svg>
+            <div style="display:flex;gap:14px;font-size:11px;color:var(--muted);margin:4px 0 0"><span>━ actual</span><span style="opacity:.6">┅ projected</span><span style="color:var(--red)">┊ target</span></div>
+            <div class="note" style="margin-top:12px">At the current pace (92/wk) the program lands <b style="color:var(--red)">~4 days past</b> the 17 Aug target. Clearing the editing bottleneck (+18/wk) pulls it back on time.</div>
+          </div>
+        </div>
+
+        <div class="grid" style="grid-template-columns:1fr 1fr 1fr">
+          <div class="card p"><div class="card-h"><h3>Stage funnel</h3></div>
+            <div class="funnel">
+              <div class="fr"><div class="nm" style="width:96px"><i style="background:var(--s1)"></i>PPT</div><div class="bar"><i style="width:96%;background:var(--s1)"></i></div><div class="ct" style="width:42px">96%</div></div>
+              <div class="fr"><div class="nm" style="width:96px"><i style="background:var(--s2)"></i>Script</div><div class="bar"><i style="width:82%;background:var(--s2)"></i></div><div class="ct" style="width:42px">82%</div></div>
+              <div class="fr"><div class="nm" style="width:96px"><i style="background:var(--s3)"></i>Present.</div><div class="bar"><i style="width:70%;background:var(--s3)"></i></div><div class="ct" style="width:42px">70%</div></div>
+              <div class="fr"><div class="nm" style="width:96px"><i style="background:var(--s4)"></i>Shooting</div><div class="bar"><i style="width:54%;background:var(--s4)"></i></div><div class="ct" style="width:42px">54%</div></div>
+              <div class="fr"><div class="nm" style="width:96px"><i style="background:var(--s5)"></i>Sh.Review</div><div class="bar"><i style="width:44%;background:var(--s5)"></i></div><div class="ct" style="width:42px">44%</div></div>
+              <div class="fr"><div class="nm" style="width:96px"><i style="background:var(--s6)"></i>Editing</div><div class="bar"><i style="width:31%;background:var(--s6)"></i></div><div class="ct" style="width:42px">31%</div></div>
+              <div class="fr"><div class="nm" style="width:96px"><i style="background:var(--s7)"></i>F.Review</div><div class="bar"><i style="width:24%;background:var(--s7)"></i></div><div class="ct" style="width:42px">24%</div></div>
+            </div>
+          </div>
+          <div class="card p"><div class="card-h"><h3>Studio utilisation</h3></div>
+            <div class="funnel">
+              <div class="fr"><div class="nm" style="width:70px">Studio 1</div><div class="bar"><i style="width:86%;background:var(--brand)"></i></div><div class="ct" style="width:42px">86%</div></div>
+              <div class="fr"><div class="nm" style="width:70px">Studio 2</div><div class="bar"><i style="width:78%;background:var(--brand)"></i></div><div class="ct" style="width:42px">78%</div></div>
+              <div class="fr"><div class="nm" style="width:70px">Studio 3</div><div class="bar"><i style="width:64%;background:var(--amber)"></i></div><div class="ct" style="width:42px">64%</div></div>
+              <div class="fr"><div class="nm" style="width:70px">Studio 4</div><div class="bar"><i style="width:81%;background:var(--brand)"></i></div><div class="ct" style="width:42px">81%</div></div>
+            </div>
+            <div class="note" style="margin-top:10px">Studio 3 under-used — shift load here to lift throughput.</div>
+          </div>
+          <div class="card p"><div class="card-h"><h3>What needs a decision</h3></div>
+            <div class="feed">
+              <div class="fi"><span class="ic2" style="background:var(--amber-bg);color:var(--amber)"><svg><use href="#i-scissors"/></svg></span><div class="tx">Editing is the bottleneck<small>+1 editor → back on target</small></div><span class="ts">11 wait</span></div>
+              <div class="fi"><span class="ic2" style="background:var(--red-bg);color:var(--red)"><svg><use href="#i-warn"/></svg></span><div class="tx">2 subjects behind<small>Microservices, Advanced Java</small></div><span class="ts">-20%</span></div>
+              <div class="fi"><span class="ic2" style="background:var(--blue-bg);color:var(--blue)"><svg><use href="#i-users"/></svg></span><div class="tx">1 trainer below SLA<small>coaching in progress</small></div><span class="ts">Akash</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+
+  <!-- 12. TRAINER MY DAY -->
+  <div class="frame-label"><span class="num">12</span> My Day <span class="role">Trainer</span><span class="tag">phone-friendly · record &amp; upload</span></div>
+  <div class="frame"><div class="app" data-role="trainer" data-active="myday">
+    <div class="side-host"></div>
+    <div class="main">
+      <div class="topbar"><div class="search"><svg><use href="#i-search"/></svg> Search my sub-topics…</div>
+        <div class="top-actions"><div class="icon-btn"><svg><use href="#i-bell"/></svg><span class="ping"></span></div></div></div>
+      <div class="content">
+        <div class="page-head"><div><h2>My Day · Madhu</h2><div class="sub">Wed 3 Jun · AM shift · Studio 1 · 5 slots</div></div>
+          <div class="ctrls"><span class="chip c-green" style="font-size:13px;padding:6px 12px"><span class="d"></span>3 done · 1 now · 1 left</span></div></div>
+        <div class="grid" style="grid-template-columns:1fr 1fr">
+          <div>
+            <div class="card-h"><h3>Today's slots</h3></div>
+            <div class="slotcard"><div class="tm"><b>08:30</b><small>S1</small></div><div class="info"><b>Print</b><small>Fundamentals · Variables</small></div><span class="chip c-green"><span class="d"></span>Recorded</span></div>
+            <div class="slotcard"><div class="tm"><b>10:30</b><small>S1</small></div><div class="info"><b>Variable</b><small>Fundamentals · Variables</small></div><span class="chip c-green"><span class="d"></span>Recorded</span></div>
+            <div class="slotcard" style="border-color:#cfe0fb;box-shadow:0 0 0 3px #e6effe"><div class="tm" style="color:var(--blue)"><b>12:30</b><small>S1 · now</small></div><div class="info"><b>Anatomy of variable</b><small>upload when done →</small></div><button class="btn-primary"><svg width="14" height="14"><use href="#i-up"/></svg> Upload link</button></div>
+            <div class="slotcard"><div class="tm"><b>16:30</b><small>S1</small></div><div class="info"><b>Values</b><small>Fundamentals · Variables</small></div><span class="chip c-grey"><span class="d"></span>Upcoming</span></div>
+          </div>
+          <div>
+            <div class="card-h"><h3>Needs my attention</h3></div>
+            <div class="card p" style="margin-bottom:12px;border-color:#f4e2b8">
+              <div style="display:flex;align-items:center;gap:10px"><span class="chip c-violet"><span class="d"></span>Rework</span><span class="sla sla-due"><svg><use href="#i-hour"/></svg>due today</span></div>
+              <div style="font-weight:700;margin:9px 0 3px">Polymorphism — reshoot</div>
+              <div style="font-size:12px;color:var(--muted)">Reviewer: "silence gap at 03:10, please re-record that section."</div>
+              <button class="btn-ghost" style="margin-top:11px"><svg width="13" height="13"><use href="#i-cal"/></svg> Book a studio slot</button>
+            </div>
+            <div class="note">🔔 Autopilot reminded you 15 min before each slot today. Keep every upload inside the <b>2-day window</b> to stay green.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="foot">RecTrack v2 · static UX mockups · no live data or logic · 12 screens across 5 roles · generated for review</div>
+</div>
+
+<script>
+  const NAVS = {
+    ph: {user:["P","Priya Nair","Program Head"], items:[
+      ["dash","i-dash","Command Center"],["pipe","i-pipe","Pipeline"],["board","i-board","Studio Board"],["adherence","i-cal","Room Adherence","3","amber"],
+      ["content","i-tree","Content"],["edit","i-scissors","Editing"],["review","i-shield","Reviews"],
+      ["sla","i-hour","SLA & Delays","7","amber"],["people","i-users","People"],
+      ["__sec","Insights"],["auto","i-bolt","Autopilot"],["report","i-report","Reports"]]},
+    trainer:{user:["M","Madhu","Trainer · Studio 1"], items:[
+      ["myday","i-cal","My Day"],["rec","i-rec","My Recordings"],["sched","i-board","My Schedule"]]},
+    editor:{user:["E","Editor One","Editing team"], items:[
+      ["edit","i-scissors","Editing Queue","2","amber"],["done","i-check","Completed"]]},
+    reviewer:{user:["R","Reviewer One","Reviewer"], items:[
+      ["review","i-shield","Review Queue","14"],["done","i-check","Approved"]]},
+    mgmt:{user:["G","Management","Read-only"], items:[
+      ["report","i-report","Overview"],["pipe","i-pipe","Pipeline"]]}
+  };
+  document.querySelectorAll('.app').forEach(app=>{
+    const role = app.getAttribute('data-role'), active = app.getAttribute('data-active');
+    const cfg = NAVS[role]; const host = app.querySelector('.side-host');
+    const side = document.createElement('aside'); side.className='side';
+    let nav = '';
+    cfg.items.forEach(it=>{
+      if(it[0]==='__sec'){ nav += `<div class="nav-sec">${it[1]}</div>`; return; }
+      const k=it[0], ic=it[1], label=it[2], badge=it[3], bcls=it[4];
+      const b = badge ? `<span class="badge ${bcls||''}">${badge}</span>` : '';
+      nav += `<a class="${k===active?'active':''}"><svg><use href="#${ic}"/></svg>${label}${b}</a>`;
+    });
+    side.innerHTML = `<div class="brand"><div class="logo">R</div><div><b>RecTrack</b><small>${role==='ph'?'Program':role}</small></div></div>
+      <nav class="nav">${nav}</nav>
+      <div class="side-foot"><div class="ava">${cfg.user[0]}</div><div><b>${cfg.user[1]}</b><small>${cfg.user[2]}</small></div></div>`;
+    host.replaceWith(side);
+  });
+</script>
+</body>
+</html>
