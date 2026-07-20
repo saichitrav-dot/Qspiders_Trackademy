@@ -107,11 +107,16 @@ export function mockAddDeployment(d: Omit<MockDeployment, 'id'>): string {
 const OBKEY = 'rt_mock_online_batch'
 export type MockOnlineBatch = { id: string; deployment_id: string; mentor_id: string; subject: string | null; batch_code: string | null; time_slot: string | null; start_date: string | null; end_date: string | null; remarks: string | null }
 function readBatch(): MockOnlineBatch[] { try { return JSON.parse(localStorage.getItem(OBKEY) || '[]') } catch { return [] } }
+// a deployment can carry MANY batches (same trainer, same day, different codes/slots)
 export function mockListOnlineBatches(): MockOnlineBatch[] { return readBatch() }
-export function mockUpsertOnlineBatch(b: Omit<MockOnlineBatch, 'id'>): void {
-  const all = readBatch(); const i = all.findIndex((x) => x.deployment_id === b.deployment_id)
-  if (i >= 0) all[i] = { ...all[i], ...b }; else all.push({ ...b, id: 'mockob_' + Math.random().toString(36).slice(2) })
-  localStorage.setItem(OBKEY, JSON.stringify(all))
+export function mockAddOnlineBatch(b: Omit<MockOnlineBatch, 'id'>): void {
+  const all = readBatch(); all.push({ ...b, id: 'mockob_' + Math.random().toString(36).slice(2) }); localStorage.setItem(OBKEY, JSON.stringify(all))
+}
+export function mockUpdateOnlineBatch(id: string, patch: Partial<MockOnlineBatch>): void {
+  const all = readBatch(); const i = all.findIndex((x) => x.id === id); if (i >= 0) { all[i] = { ...all[i], ...patch }; localStorage.setItem(OBKEY, JSON.stringify(all)) }
+}
+export function mockDeleteOnlineBatch(id: string): void {
+  localStorage.setItem(OBKEY, JSON.stringify(readBatch().filter((x) => x.id !== id)))
 }
 export function mockUpdateDeployment(id: string, patch: Partial<MockDeployment>): void {
   const all = readDeploy(); const i = all.findIndex(x => x.id === id); if (i >= 0) { all[i] = { ...all[i], ...patch }; localStorage.setItem(DKEY, JSON.stringify(all)) }

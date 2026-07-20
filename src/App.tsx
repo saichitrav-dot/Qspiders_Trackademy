@@ -14,7 +14,7 @@ import {
 import dayjs from 'dayjs'
 import { FunnelChart, Funnel, LabelList, PieChart, Pie, BarChart, Bar, XAxis, YAxis, Tooltip, Cell, ResponsiveContainer, Treemap } from 'recharts'
 import { supabase } from './supabase'
-import { MOCK_GOALS, mockListGoals, mockSaveGoal, MOCK_MENTOR_SUBTOPIC, mockListSubProg, mockSaveSubProg, mockListRatings, mockSaveRatings, mockRemoveDailyRatings, mockListMentorLeads, mockAllMentorLeads, mockSaveMentorLeads, mockAllProgramTrainers, mockSaveProgramTrainers, mockListDeployments, mockAddDeployment, mockUpdateDeployment, mockListHolidays, mockAddHoliday, mockUpdateHoliday, mockDeleteHoliday, mockListReleases, mockAddRelease, mockDeleteRelease, mockReleaseItems, mockSetReleaseItem, mockListAttendance, mockAllAttendance, mockSetAttendance, mockAllMentorStatus, mockSetMentorStatus, mockListOnlineBatches, mockUpsertOnlineBatch } from './mockGoals'
+import { MOCK_GOALS, mockListGoals, mockSaveGoal, MOCK_MENTOR_SUBTOPIC, mockListSubProg, mockSaveSubProg, mockListRatings, mockSaveRatings, mockRemoveDailyRatings, mockListMentorLeads, mockAllMentorLeads, mockSaveMentorLeads, mockAllProgramTrainers, mockSaveProgramTrainers, mockListDeployments, mockAddDeployment, mockUpdateDeployment, mockListHolidays, mockAddHoliday, mockUpdateHoliday, mockDeleteHoliday, mockListReleases, mockAddRelease, mockDeleteRelease, mockReleaseItems, mockSetReleaseItem, mockListAttendance, mockAllAttendance, mockSetAttendance, mockAllMentorStatus, mockSetMentorStatus, mockListOnlineBatches, mockAddOnlineBatch, mockUpdateOnlineBatch, mockDeleteOnlineBatch } from './mockGoals'
 
 const { Sider, Header, Content } = Layout
 
@@ -2147,6 +2147,9 @@ function SubtopicSteps({ mentorId, subtopicId, prog, canEdit, onSaved }: any) {
 }
 
 const DEPLOY_TYPES = ['Branch', 'Online training', 'College', 'Corporate training', 'College grooming']
+const DEPLOY_TYPE_COLOR: Record<string, string> = {
+  'Branch': '#2563eb', 'Online training': '#7c3aed', 'College': '#0891b2', 'Corporate training': '#c2410c', 'College grooming': '#16a34a',
+}
 // Training-side lifecycle status (v34). "deployed" / "back to bench" are NOT here —
 // they are derived from mentor_deployment (v30). This only tracks the training state.
 const MENTOR_LIFECYCLE: { key: string; label: string; color: string }[] = [
@@ -2175,11 +2178,15 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
   const [fbDep, setFbDep] = useState<any>(null) // the deployment (return) the feedback is for
   const [fbScores, setFbScores] = useState<any>({})
   const [feedbackByDep, setFeedbackByDep] = useState<any>({}) // deployment_id -> { category: latest } (per completed training/return)
-  const [batches, setBatches] = useState<any[]>([]) // mentor_online_batch rows (v35) — one per Online training deployment
+  const [batches, setBatches] = useState<any[]>([]) // mentor_online_batch rows (v35) — a deployment can have MANY batches
+  const [bModal, setBModal] = useState<any>(null)   // { dep, batch? } while the add/edit-batch modal is open
+  const [bForm, setBForm] = useState<any>({})
+  const [rCell, setRCell] = useState<any>(null) // Back-to-bench: { subject, band } whose mentor names are open
   const nameById: any = Object.fromEntries(mentors.map((m: any) => [m.id, m.full_name]))
   const empById: any = Object.fromEntries(mentors.map((m: any) => [m.id, m.employee_id || '']))
   const mentorIds = new Set(mentors.map((m: any) => m.id))
-  const batchByDep: any = Object.fromEntries(batches.map((b: any) => [b.deployment_id, b]))
+  // deployment_id -> ALL its batches (same trainer can run several batches on the same date)
+  const batchesByDep: any = batches.reduce((a: any, b: any) => { (a[b.deployment_id] = a[b.deployment_id] || []).push(b); return a }, {})
   async function load() {
     if (MOCK_MENTOR_SUBTOPIC) { setDeps(mockListDeployments()); setBatches(mockListOnlineBatches()); return }
     const r = await supabase.from('mentor_deployment').select('*').order('created_at', { ascending: false })
@@ -2200,9 +2207,8 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
   }
   useEffect(() => { load(); loadFeedback() }, [])
   function openEdit(d: any) {
-    const b = batchByDep[d.id] || {}
     setEditId(d.id)
-    setForm({ mentor_id: d.mentor_id, subject: d.subject || '', deployment_type: d.deployment_type, from_date: d.from_date ? dayjs(d.from_date) : null, to_date: d.to_date ? dayjs(d.to_date) : null, details: d.details || '', batch_code: b.batch_code || '', time_slot: b.time_slot || '', batch_remarks: b.remarks || '' })
+    setForm({ mentor_id: d.mentor_id, subject: d.subject || '', deployment_type: d.deployment_type, from_date: d.from_date ? dayjs(d.from_date) : null, to_date: d.to_date ? dayjs(d.to_date) : null, details: d.details || '' })
     setAdd({ mentor_id: d.mentor_id, name: nameById[d.mentor_id] })
   }
   async function submitAdd() {
@@ -2210,33 +2216,15 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
     if (!mid) { msg.warning('Pick a mentor.'); return }
     if (!form.deployment_type) { msg.warning('Pick a deployment type.'); return }
     const fields: any = { mentor_id: mid, subject: form.subject || null, deployment_type: form.deployment_type, from_date: form.from_date ? form.from_date.format('YYYY-MM-DD') : null, to_date: form.to_date ? form.to_date.format('YYYY-MM-DD') : null, details: form.details || null }
-    // Online training carries its own batch record (v35): batch code / time slot / dates / remarks
-    const isOnline = form.deployment_type === 'Online training'
-    const batchOf = (depId: string) => ({ deployment_id: depId, mentor_id: mid, subject: form.subject || null, batch_code: form.batch_code || null, time_slot: form.time_slot || null, start_date: fields.from_date, end_date: fields.to_date, remarks: form.batch_remarks || null })
-    async function saveBatch(depId: string) {
-      if (!isOnline || !depId) return
-      if (MOCK_MENTOR_SUBTOPIC) { mockUpsertOnlineBatch(batchOf(depId) as any); return }
-      const ex = batches.find((b: any) => b.deployment_id === depId)
-      const w = ex ? await supabase.from('mentor_online_batch').update({ ...batchOf(depId), updated_at: new Date().toISOString() }).eq('id', ex.id)
-                   : await supabase.from('mentor_online_batch').insert(batchOf(depId))
-      if (w.error) msg.warning(/mentor_online_batch|relation|does not exist/.test(w.error.message) ? 'Deployment saved — run RecTrack_v35.sql to store online batch details.' : w.error.message)
-    }
     if (editId) { // edit an existing deployment's details (does NOT change its approval status)
       if (MOCK_MENTOR_SUBTOPIC) mockUpdateDeployment(editId, fields)
       else { const u = await supabase.from('mentor_deployment').update({ ...fields, updated_at: new Date().toISOString() }).eq('id', editId); if (u.error) { msg.error(u.error.message); return } }
-      await saveBatch(editId)
       msg.success('Deployment updated ✓')
     } else {
       const rec = { ...fields, status: 'pending', requested_by: person?.id || null, approved_by: null }
-      let newId = ''
-      if (MOCK_MENTOR_SUBTOPIC) newId = mockAddDeployment(rec as any)
-      else {
-        const ins = await supabase.from('mentor_deployment').insert(rec).select('id').maybeSingle()
-        if (ins.error) { msg.error(/mentor_deployment|relation|does not exist/.test(ins.error.message) ? 'Run RecTrack_v30.sql first.' : ins.error.message); return }
-        newId = ins.data?.id || ''
-      }
-      await saveBatch(newId)
-      msg.success('Deployment requested — pending Manager approval')
+      if (MOCK_MENTOR_SUBTOPIC) mockAddDeployment(rec as any)
+      else { const ins = await supabase.from('mentor_deployment').insert(rec); if (ins.error) { msg.error(/mentor_deployment|relation|does not exist/.test(ins.error.message) ? 'Run RecTrack_v30.sql first.' : ins.error.message); return } }
+      msg.success(form.deployment_type === 'Online training' ? 'Deployment requested — expand the row to add its batches' : 'Deployment requested — pending Manager approval')
     }
     setAdd(null); setEditId(null); setForm({}); load()
   }
@@ -2253,6 +2241,32 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
     if (MOCK_MENTOR_SUBTOPIC) mockUpdateDeployment(d.id, { status, approved_by: person?.id || null })
     else { const u = await supabase.from('mentor_deployment').update({ status, approved_by: person?.id || null, updated_at: new Date().toISOString() }).eq('id', d.id); if (u.error) { msg.error(u.error.message); return } }
     msg.success(status === 'approved' ? 'Deployment approved ✓' : 'Deployment rejected'); load()
+  }
+  // ---- online batches (v35): a deployment can hold many (same day, different codes / slots) ----
+  function openBatch(dep: any, batch?: any) {
+    setBModal({ dep, batch })
+    setBForm(batch
+      ? { subject: batch.subject || '', batch_code: batch.batch_code || '', time_slot: batch.time_slot || '', start_date: batch.start_date ? dayjs(batch.start_date) : null, end_date: batch.end_date ? dayjs(batch.end_date) : null, remarks: batch.remarks || '' }
+      : { subject: dep.subject || '', batch_code: '', time_slot: '', start_date: dep.from_date ? dayjs(dep.from_date) : null, end_date: dep.to_date ? dayjs(dep.to_date) : null, remarks: '' })
+  }
+  async function saveBatch() {
+    const dep = bModal.dep
+    if (!bForm.batch_code?.trim()) { msg.warning('Batch code is required.'); return }
+    if (!bForm.time_slot?.trim()) { msg.warning('Time slot is required.'); return }
+    const rec: any = { deployment_id: dep.id, mentor_id: dep.mentor_id, subject: bForm.subject?.trim() || null, batch_code: bForm.batch_code.trim(), time_slot: bForm.time_slot.trim(), start_date: bForm.start_date ? bForm.start_date.format('YYYY-MM-DD') : null, end_date: bForm.end_date ? bForm.end_date.format('YYYY-MM-DD') : null, remarks: bForm.remarks?.trim() || null }
+    if (MOCK_MENTOR_SUBTOPIC) { bModal.batch ? mockUpdateOnlineBatch(bModal.batch.id, rec) : mockAddOnlineBatch(rec) }
+    else {
+      const w = bModal.batch
+        ? await supabase.from('mentor_online_batch').update({ ...rec, updated_at: new Date().toISOString() }).eq('id', bModal.batch.id)
+        : await supabase.from('mentor_online_batch').insert(rec)
+      if (w.error) { msg.error(/mentor_online_batch|relation|does not exist/.test(w.error.message) ? 'Run RecTrack_v35.sql first to enable online batches.' : w.error.message); return }
+    }
+    msg.success(bModal.batch ? 'Batch updated ✓' : 'Batch added ✓'); setBModal(null); setBForm({}); load()
+  }
+  async function deleteBatch(b: any) {
+    if (MOCK_MENTOR_SUBTOPIC) mockDeleteOnlineBatch(b.id)
+    else { const w = await supabase.from('mentor_online_batch').delete().eq('id', b.id); if (w.error) { msg.error(w.error.message); return } }
+    msg.success('Batch removed'); load()
   }
   async function endDeployment(d: any) {
     if (MOCK_MENTOR_SUBTOPIC) mockUpdateDeployment(d.id, { status: 'completed' })
@@ -2274,15 +2288,8 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
     <Row gutter={8}><Col span={12}><div style={lbl}>From date</div><DatePicker style={{ width: '100%' }} value={form.from_date} onChange={(v) => setForm((f: any) => ({ ...f, from_date: v }))} /></Col><Col span={12}><div style={lbl}>To date</div><DatePicker style={{ width: '100%' }} value={form.to_date} onChange={(v) => setForm((f: any) => ({ ...f, to_date: v }))} /></Col></Row>
     <div style={lbl}>Details</div>
     <Input.TextArea rows={3} placeholder="Deployment details (entered for the mentor)…" value={form.details || ''} onChange={(e) => setForm((f: any) => ({ ...f, details: e.target.value }))} />
-    {form.deployment_type === 'Online training' && <div style={{ marginTop: 14, padding: 12, background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 10 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: '#161a22' }}>Online batch details</div>
-      <div style={{ fontSize: 11, color: '#9aa1ad', marginTop: 2 }}>Recorded against {add.name || 'this mentor'} — name, employee ID, subject and dates come from above.</div>
-      <Row gutter={8}>
-        <Col span={12}><div style={lbl}>Batch code</div><Input placeholder="e.g. PY-ON-2026-04" value={form.batch_code || ''} onChange={(e) => setForm((f: any) => ({ ...f, batch_code: e.target.value }))} /></Col>
-        <Col span={12}><div style={lbl}>Time slot</div><Input placeholder="e.g. 7:00–9:00 AM" value={form.time_slot || ''} onChange={(e) => setForm((f: any) => ({ ...f, time_slot: e.target.value }))} /></Col>
-      </Row>
-      <div style={lbl}>Remarks</div>
-      <Input.TextArea rows={2} placeholder="Remarks for this batch…" value={form.batch_remarks || ''} onChange={(e) => setForm((f: any) => ({ ...f, batch_remarks: e.target.value }))} />
+    {form.deployment_type === 'Online training' && <div style={{ marginTop: 14, padding: '10px 12px', background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 10, fontSize: 12, color: '#69707d' }}>
+      <b>Online batches</b> are added per deployment — save this, then <b>expand the row</b> on the Deployed tab to add one or more batches (a mentor can run several batches on the same date with different codes / time slots).
     </div>}
     {!editId && <div style={{ fontSize: 11, color: '#9aa1ad', marginTop: 8 }}>This creates a request. A Manager must approve it before the mentor is marked deployed.</div>}
   </Modal>
@@ -2302,15 +2309,80 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
       </>}
   </Modal>
 
+  const batchModal = bModal && <Modal open title={`${bModal.batch ? 'Edit' : 'Add'} online batch · ${nameById[bModal.dep.mentor_id] || ''}`} okText={bModal.batch ? 'Save batch' : 'Add batch'} onOk={saveBatch} onCancel={() => { setBModal(null); setBForm({}) }} destroyOnClose>
+    <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 4 }}>Name and Employee ID come from the mentor · {empById[bModal.dep.mentor_id] || 'no employee ID'}</div>
+    <Row gutter={8}>
+      <Col span={12}><div style={lbl}>Subject</div><Input placeholder="e.g. Python" value={bForm.subject || ''} onChange={(e) => setBForm((f: any) => ({ ...f, subject: e.target.value }))} /></Col>
+      <Col span={12}><div style={lbl}>Batch code</div><Input placeholder="e.g. PY-ON-2026-04" value={bForm.batch_code || ''} onChange={(e) => setBForm((f: any) => ({ ...f, batch_code: e.target.value }))} /></Col>
+    </Row>
+    <div style={lbl}>Time slot</div>
+    <Input placeholder="e.g. 7:00–9:00 AM" value={bForm.time_slot || ''} onChange={(e) => setBForm((f: any) => ({ ...f, time_slot: e.target.value }))} />
+    <Row gutter={8}>
+      <Col span={12}><div style={lbl}>Start date</div><DatePicker style={{ width: '100%' }} value={bForm.start_date} onChange={(v) => setBForm((f: any) => ({ ...f, start_date: v }))} /></Col>
+      <Col span={12}><div style={lbl}>End date</div><DatePicker style={{ width: '100%' }} value={bForm.end_date} onChange={(v) => setBForm((f: any) => ({ ...f, end_date: v }))} /></Col>
+    </Row>
+    <div style={lbl}>Remarks</div>
+    <Input.TextArea rows={2} placeholder="Remarks for this batch…" value={bForm.remarks || ''} onChange={(e) => setBForm((f: any) => ({ ...f, remarks: e.target.value }))} />
+  </Modal>
+
   if (mode === 'bench') {
     // Back to bench = has COMPLETED any training (Branch / Online / College / Corporate / College grooming)
     // and is not currently on an active deployment → available to be mapped again or upskilled.
     const returned = new Set(myDeps.filter((d: any) => d.status === 'completed').map((d: any) => d.mentor_id))
     const bench = mentors.filter((m: any) => !activeDeployed.has(m.id) && returned.has(m.id))
+    // A bench mentor's rating = mean of the deployment-feedback scores (student / external coordinator /
+    // reporting lead). Each deployment carries a SUBJECT, so ratings are shown PER SUBJECT: one row per
+    // subject × a 5→1 band per column. The same mentor can sit in different bands for different subjects.
+    const SUBJ_NONE = '— no subject —'
+    const subjOfDep = (d: any) => d.subject || SUBJ_NONE
+    const benchIds = new Set(bench.map((m: any) => m.id))
+    const benchDeps = (deps || []).filter((d: any) => benchIds.has(d.mentor_id) && (d.status === 'approved' || d.status === 'completed'))
+    const depsOfSubj = (mid: string, subj: string) => benchDeps.filter((d: any) => d.mentor_id === mid && subjOfDep(d) === subj)
+    const avgOfVals = (vals: number[]) => vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null
+    const scoresOf = (ds: any[]) => { const v: number[] = []; ds.forEach((d: any) => { const f = feedbackByDep[d.id]; if (f) FB_KEYS.forEach((k) => { if (f[k] != null) v.push(Number(f[k])) }) }); return v }
+    const fbAvgOf = (mid: string, subj?: string) => avgOfVals(scoresOf(subj ? depsOfSubj(mid, subj) : benchDeps.filter((d: any) => d.mentor_id === mid)))
+    const bandOf = (avg: number | null) => avg == null ? 'none' : String(Math.max(1, Math.min(5, Math.round(avg))))
+    const BANDS = ['5', '4', '3', '2', '1', 'none']
+    const BAND_COLOR: Record<string, string> = { '5': '#16a34a', '4': '#65a30d', '3': '#d97706', '2': '#ea580c', '1': '#dc2626', none: '#9aa1ad' }
+    const bandLabel = (b: string) => b === 'none' ? 'Not rated' : `${b} ★`
+    // subject → band → mentors (with that subject's average)
+    const subjList = [...new Set(benchDeps.map(subjOfDep))].sort() as string[]
+    const matrix = subjList.map((subj) => {
+      const bands: Record<string, any[]> = { '5': [], '4': [], '3': [], '2': [], '1': [], none: [] }
+      bench.filter((m: any) => depsOfSubj(m.id, subj).length > 0).forEach((m: any) => {
+        const avg = fbAvgOf(m.id, subj); bands[bandOf(avg)].push({ ...m, _avg: avg })
+      })
+      const total = BANDS.reduce((s, b) => s + bands[b].length, 0)
+      return { subject: subj, bands, total }
+    }).sort((a, b) => b.total - a.total)
+    const cellFor = (subj: string, band: string) => (matrix.find((r) => r.subject === subj)?.bands[band]) || []
+    const ratingCards = <Card size="small" title="Mentor ratings by subject" style={{ marginBottom: 16 }} extra={<span style={{ fontSize: 11, color: '#9aa1ad' }}>Deployment feedback per subject · tap a number for the names</span>}>
+      {matrix.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No completed trainings yet — ratings appear once mentors return and are given feedback." />
+        : <Table size="small" rowKey="subject" pagination={false} scroll={{ x: 'max-content' }} dataSource={matrix} columns={[
+          { title: 'Subject', dataIndex: 'subject', render: (v: string) => <b>{v}</b> },
+          { title: 'Mentors', width: 90, render: (_: any, r: any) => <Tag color="geekblue">{r.total}</Tag> },
+          ...BANDS.map((b) => ({
+            title: <span style={{ color: BAND_COLOR[b], fontWeight: 700 }}>{bandLabel(b)}</span>, width: 92, align: 'center' as const,
+            render: (_: any, r: any) => { const n = r.bands[b].length; return n === 0 ? <span style={{ color: '#d9dde3' }}>0</span>
+              : <span onClick={() => setRCell({ subject: r.subject, band: b })} style={{ cursor: 'pointer', display: 'inline-block', minWidth: 30, padding: '2px 8px', borderRadius: 6, fontWeight: 800, color: '#fff', background: BAND_COLOR[b] }}>{n}</span> },
+          })),
+        ] as any} />}
+    </Card>
+    const ratingModal = rCell && (() => {
+      const list = cellFor(rCell.subject, rCell.band).slice().sort((a: any, b: any) => (b._avg ?? -1) - (a._avg ?? -1))
+      return <Modal open title={<span><Tag color="geekblue">{rCell.subject}</Tag><Tag style={{ background: BAND_COLOR[rCell.band], color: '#fff', border: 'none' }}>{bandLabel(rCell.band)}</Tag> {list.length} mentor{list.length === 1 ? '' : 's'}</span>} footer={null} width={560} onCancel={() => setRCell(null)}>
+        {list.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No mentors here" />
+          : list.map((m: any) => <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: '1px solid #f0f0f0' }}>
+            <span><b>{m.full_name}</b>{m.employee_id ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad', marginLeft: 8 }}>{m.employee_id}</span> : null}</span>
+            {m._avg != null ? <Tag color={m._avg >= 4 ? 'green' : m._avg >= 3 ? 'orange' : 'red'}>{m._avg.toFixed(2)} / 5</Tag> : <span style={{ fontSize: 12, color: '#9aa1ad' }}>no feedback yet</span>}
+          </div>)}
+      </Modal>
+    })()
     const benchShown = ql ? bench.filter((m: any) => String(m.full_name || '').toLowerCase().includes(ql)) : bench
     const cols = [
       { title: 'Mentor', dataIndex: 'full_name', render: (v: string) => <b>{v}</b> },
       { title: 'Subject', render: (_: any, m: any) => subjectOf[m.id] ? <Tag color="geekblue">{subjectOf[m.id]}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+      { title: 'Rating · all subjects', width: 150, render: (_: any, m: any) => { const a = fbAvgOf(m.id); return a != null ? <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'}>{a.toFixed(2)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> } },
       { title: 'Status', render: (_: any, m: any) => returned.has(m.id) ? <Tag color="blue">Returned from deployment</Tag> : <Tag>Available</Tag> },
       { title: 'Feedback (per completed training)', render: (_: any, m: any) => {
         const mDeps = (deps || []).filter((d: any) => d.mentor_id === m.id && (d.status === 'approved' || d.status === 'completed') && feedbackByDep[d.id])
@@ -2325,10 +2397,11 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
         <Button size="small" type="primary" onClick={() => { setForm({ subject: subjectOf[m.id] || '' }); setAdd({ mentor_id: m.id, name: m.full_name }) }}>Map / Deploy</Button>
       </span> },
     ]
-    return <><div style={{ fontSize: 12, color: '#69707d', marginBottom: 10 }}>Mentors who have <b>completed a training</b> (Branch / Online / College / Corporate / College grooming) and are not on an active deployment — available to be mapped to another requirement or upskilled.</div>
+    return <><div style={{ fontSize: 12, color: '#69707d', marginBottom: 10 }}>Mentors who have <b>completed a training</b> (Branch / Online / College / Corporate / College grooming) and are not on an active deployment — available to be mapped to another requirement or upskilled. Rating = average of their deployment feedback across all returns.</div>
+      {ratingCards}
       <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 280, marginBottom: 12 }} />
       <Table size="middle" rowKey="id" columns={cols as any} dataSource={benchShown} pagination={{ pageSize: 12 }} scroll={{ x: 'max-content' }} locale={{ emptyText: <Empty description={ql ? `No mentors match “${q}”` : 'No mentors back on the bench yet — nobody has completed a training and returned.'} /> }} />
-      {addModal}{feedbackModal}</>
+      {addModal}{feedbackModal}{ratingModal}</>
   }
   const cols = [
     { title: 'Mentor', dataIndex: 'mentor_id', render: (v: string) => <b>{nameById[v] || '—'}</b> },
@@ -2347,8 +2420,29 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
     </span> },
   ]
   const depShown = ql ? myDeps.filter((d: any) => [nameById[d.mentor_id], d.deployment_type, d.details, d.status].some((x: any) => String(x || '').toLowerCase().includes(ql))) : myDeps
-  return <><div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-      <div style={{ fontSize: 12, color: '#69707d' }}>Deployments need a Manager's prior approval before they go active.</div>
+  // how many DISTINCT mentors are currently deployed (approved) under each deployment type.
+  // A mentor with two approved deployments of the same type counts once; across types they count in each.
+  const byType: Record<string, Set<string>> = {}
+  DEPLOY_TYPES.forEach((t) => { byType[t] = new Set() })
+  myDeps.filter((d: any) => d.status === 'approved').forEach((d: any) => { if (byType[d.deployment_type]) byType[d.deployment_type].add(d.mentor_id) })
+  // total = DISTINCT mentors currently deployed. Deliberately not the sum of the per-type cards —
+  // a mentor deployed under two types appears in both cards but must count once here.
+  const totalDeployed = activeDeployed.size
+  const typeCards = <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+    <Col xs={12} md={8} lg={4}>
+      <Card hoverable onClick={() => setQ('')} styles={{ body: { padding: 14 } }} style={{ background: '#f7f8fb', borderColor: q === '' ? PRIMARY : undefined }}>
+        <Statistic title={<span style={{ fontSize: 12, fontWeight: 700 }}>Total deployed<span style={{ fontSize: 10, color: '#9aa1ad', fontWeight: 400 }}> · all types</span></span>} value={totalDeployed} suffix={<span style={{ fontSize: 11, color: '#9aa1ad' }}>mentor{totalDeployed === 1 ? '' : 's'}</span>} valueStyle={{ color: PRIMARY, fontWeight: 800, fontSize: 22 }} />
+      </Card>
+    </Col>
+    {DEPLOY_TYPES.map((t) => <Col xs={12} md={8} lg={4} key={t}>
+      <Card hoverable onClick={() => setQ(q === t ? '' : t)} styles={{ body: { padding: 14 } }} style={q === t ? { borderColor: DEPLOY_TYPE_COLOR[t], boxShadow: `0 0 0 1px ${DEPLOY_TYPE_COLOR[t]}` } : undefined}>
+        <Statistic title={<span style={{ fontSize: 12 }}>{t}<span style={{ fontSize: 10, color: '#9aa1ad' }}> · tap to filter</span></span>} value={byType[t].size} suffix={<span style={{ fontSize: 11, color: '#9aa1ad' }}>mentor{byType[t].size === 1 ? '' : 's'}</span>} valueStyle={{ color: DEPLOY_TYPE_COLOR[t], fontWeight: 800, fontSize: 22 }} />
+      </Card>
+    </Col>)}
+  </Row>
+  return <>{typeCards}
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+      <div style={{ fontSize: 12, color: '#69707d' }}>Counts show mentors <b>currently deployed</b> (Manager-approved) per type. Deployments need a Manager's prior approval before they go active.</div>
       <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setForm({}); setAdd({ mentor_id: null }) }}>New deployment</Button>
     </div>
     <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search by mentor, type, details or status…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 340, marginBottom: 12 }} />
@@ -2356,22 +2450,32 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
       expandable={{
         rowExpandable: (d: any) => d.deployment_type === 'Online training',
         expandedRowRender: (d: any) => {
-          const b = batchByDep[d.id]
-          if (!b) return <span style={{ fontSize: 12, color: '#9aa1ad' }}>No online batch details yet — use <b>Edit</b> on this deployment to add the batch code / time slot.</span>
-          return <Table size="small" rowKey="id" pagination={false} dataSource={[b]} scroll={{ x: 'max-content' }} columns={[
-            { title: 'Name', render: () => <b>{nameById[d.mentor_id] || '—'}</b> },
-            { title: 'Employee ID', render: () => empById[d.mentor_id] ? <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{empById[d.mentor_id]}</span> : <span style={{ color: '#9aa1ad' }}>—</span> },
-            { title: 'Subject', render: (_: any, x: any) => x.subject || <span style={{ color: '#9aa1ad' }}>—</span> },
-            { title: 'Batch code', render: (_: any, x: any) => x.batch_code ? <Tag color="geekblue">{x.batch_code}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
-            { title: 'Time slot', render: (_: any, x: any) => x.time_slot || <span style={{ color: '#9aa1ad' }}>—</span> },
-            { title: 'Start date', render: (_: any, x: any) => x.start_date ? dayjs(x.start_date).format('DD MMM YYYY') : <span style={{ color: '#9aa1ad' }}>—</span> },
-            { title: 'End date', render: (_: any, x: any) => x.end_date ? dayjs(x.end_date).format('DD MMM YYYY') : <span style={{ color: '#9aa1ad' }}>—</span> },
-            { title: 'Remarks', render: (_: any, x: any) => x.remarks || <span style={{ color: '#9aa1ad' }}>—</span> },
-          ] as any} />
+          const list = batchesByDep[d.id] || []
+          return <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 12, color: '#69707d' }}>Online batches for <b>{nameById[d.mentor_id] || '—'}</b> — {list.length} batch{list.length === 1 ? '' : 'es'}. The same mentor can run several batches on the same date with different codes / time slots.</span>
+              <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openBatch(d)}>Add batch</Button>
+            </div>
+            {list.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No batches yet — click “Add batch”." />
+              : <Table size="small" rowKey="id" pagination={false} dataSource={list} scroll={{ x: 'max-content' }} columns={[
+                { title: 'Name', render: () => <b>{nameById[d.mentor_id] || '—'}</b> },
+                { title: 'Employee ID', render: () => empById[d.mentor_id] ? <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{empById[d.mentor_id]}</span> : <span style={{ color: '#9aa1ad' }}>—</span> },
+                { title: 'Subject', render: (_: any, x: any) => x.subject || <span style={{ color: '#9aa1ad' }}>—</span> },
+                { title: 'Batch code', render: (_: any, x: any) => x.batch_code ? <Tag color="geekblue">{x.batch_code}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+                { title: 'Time slot', render: (_: any, x: any) => x.time_slot ? <Tag color="purple">{x.time_slot}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+                { title: 'Start date', render: (_: any, x: any) => x.start_date ? dayjs(x.start_date).format('DD MMM YYYY') : <span style={{ color: '#9aa1ad' }}>—</span> },
+                { title: 'End date', render: (_: any, x: any) => x.end_date ? dayjs(x.end_date).format('DD MMM YYYY') : <span style={{ color: '#9aa1ad' }}>—</span> },
+                { title: 'Remarks', render: (_: any, x: any) => x.remarks || <span style={{ color: '#9aa1ad' }}>—</span> },
+                { title: '', width: 130, render: (_: any, x: any) => <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                  <Button size="small" icon={<EditOutlined />} onClick={() => openBatch(d, x)} />
+                  <Popconfirm title="Remove this batch?" okText="Remove" okButtonProps={{ danger: true }} onConfirm={() => deleteBatch(x)}><Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm>
+                </span> },
+              ] as any} />}
+          </div>
         },
       }}
       locale={{ emptyText: <Empty description={ql ? `No deployments match “${q}”` : 'No deployments yet — deploy a mentor from the “Back to bench” tab or add one here.'} /> }} />
-    {addModal}{feedbackModal}</>
+    {addModal}{feedbackModal}{batchModal}</>
 }
 
 // v34: derive a mentor's live "bucket". Deployed / bench come from mentor_deployment;
@@ -3085,12 +3189,27 @@ function MentorGeneration() {
   // v34: a mentor can hold MULTIPLE subjects — full set per mentor for the pipeline/subject metrics
   const mentorSubjects: Record<string, Set<string>> = {}
   rows.forEach((r: any) => { const s = r.topic?.chapter?.subject?.name; if (s) (mentorSubjects[r.mentor_id] = mentorSubjects[r.mentor_id] || new Set()).add(s) })
+  // per-subject count of mentors currently UNDER TRAINING (a mentor holding 2 subjects counts in both)
+  const subjTraining: Record<string, number> = {}
+  mentors.forEach((m: any) => {
+    const b = mentorBucket(m, activeDeployedSet as Set<string>, returnedSet as Set<string>)
+    if (b !== 'in_training' && b !== 'upskilling') return
+    const ss = mentorSubjects[m.id]
+    if (ss && ss.size) ss.forEach((s: string) => { subjTraining[s] = (subjTraining[s] || 0) + 1 })
+    else subjTraining['— no subject —'] = (subjTraining['— no subject —'] || 0) + 1
+  })
+  const subjTrainingRows = Object.keys(subjTraining).sort((a, b) => subjTraining[b] - subjTraining[a])
+  const subjTrainingCards = subjTrainingRows.length > 0 && <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+    {subjTrainingRows.map((s) => <Col xs={12} md={8} lg={6} key={s}>
+      <Card styles={{ body: { padding: 14 } }}><Statistic title={<span style={{ fontSize: 12 }}>{s}</span>} value={subjTraining[s]} suffix={<span style={{ fontSize: 11, color: '#9aa1ad' }}>under training</span>} valueStyle={{ color: '#d97706', fontWeight: 800, fontSize: 22 }} /></Card>
+    </Col>)}
+  </Row>
   return <div>
     <PageHead title="My workspace" sub="Your training topics and mentor management" />
     <Tabs defaultActiveKey="content" items={[
       { key: 'content', label: 'Training topics', children: <ContentExplorer /> },
       { key: 'pipeline', label: 'Pipeline & subjects', children: <MentorPipeline mentors={mentors} mentorSubjects={mentorSubjects} deps={deps} onChanged={load} /> },
-      { key: 'mentor', label: `Mentor under training (${trainingCount})`, children: <div>{kpis}<Tabs defaultActiveKey="prep" items={[
+      { key: 'mentor', label: `Mentor under training (${trainingCount})`, children: <div>{kpis}{subjTrainingCards}<Tabs defaultActiveKey="prep" items={[
         { key: 'prep', label: 'Preparation board', children: <div>{assignCard}{boardCard}</div> },
         { key: 'daily', label: 'Daily corporate etiquette', children: dailyCard },
       ]} /></div> },
@@ -4328,6 +4447,8 @@ function MentorAnalytics() {
   const isAdmin = person?.role === 'admin'
   const [d, setD] = useState<any>(null)
   const [histQ, setHistQ] = useState('')
+  const [histSubj, setHistSubj] = useState<string | null>(null)  // Rating history → filter by subject
+  const [histBand, setHistBand] = useState<string | null>(null)  // Rating history → filter by rating band
   async function load() {
     const p = await supabase.from('person').select('id, full_name, role, is_active, lead_id, program_id')
     const people = p.data || []
@@ -4408,7 +4529,29 @@ function MentorAnalytics() {
     const rs = d.ratings.filter((r: any) => r.mentor_id === m.id && r.score != null).slice().sort((a: any, b: any) => String(a.rated_on).localeCompare(String(b.rated_on)))
     return { key: m.id, name: m.full_name, subject: mentorSubjectOf(m.id), count: rs.length, first: rs[0]?.rated_on || null, last: rs[rs.length - 1]?.rated_on || null, avg: overallOf(m.id), entries: rs }
   }).sort((a: any, b: any) => (b.avg ?? -1) - (a.avg ?? -1))
-  const histShown = histQ.trim() ? histRows.filter((r: any) => String(r.name || '').toLowerCase().includes(histQ.trim().toLowerCase())) : histRows
+  // subject options come from the mentors actually in view
+  const histSubjOpts = [...new Set(histRows.map((r: any) => r.subject).filter(Boolean))].sort() as string[]
+  const RATING_BANDS = [
+    { value: 'gte45', label: '4.5 – 5 (excellent)' },
+    { value: 'gte4', label: '4 – 4.5 (good)' },
+    { value: 'gte3', label: '3 – 4 (average)' },
+    { value: 'lt3', label: 'Below 3 (needs attention)' },
+    { value: 'none', label: 'Not rated yet' },
+  ]
+  const inBand = (avg: number | null) => {
+    if (!histBand) return true
+    if (histBand === 'none') return avg == null
+    if (avg == null) return false
+    if (histBand === 'gte45') return avg >= 4.5
+    if (histBand === 'gte4') return avg >= 4 && avg < 4.5
+    if (histBand === 'gte3') return avg >= 3 && avg < 4
+    if (histBand === 'lt3') return avg < 3
+    return true
+  }
+  const histShown = histRows.filter((r: any) =>
+    (!histQ.trim() || String(r.name || '').toLowerCase().includes(histQ.trim().toLowerCase()))
+    && (!histSubj || r.subject === histSubj)
+    && inBand(r.avg))
   const histCols = [
     { title: 'Mentor', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
     { title: 'Subject', dataIndex: 'subject', width: 150, render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
@@ -4418,7 +4561,6 @@ function MentorAnalytics() {
     { title: 'Average rating', dataIndex: 'avg', width: 130, render: (v: number) => v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v.toFixed(2)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
   ]
   const nMentors = rows.length
-  const deployReady = rows.filter((r: any) => r.deployReady).length
   const withR = rows.filter((r: any) => r.overall != null)
   const avgRating = withR.length ? withR.reduce((s: number, r: any) => s + r.overall, 0) / withR.length : null
   const avgReadiness = nMentors ? rows.reduce((s: number, r: any) => s + r.readiness, 0) / nMentors : 0
@@ -4427,7 +4569,6 @@ function MentorAnalytics() {
   const attention = rows.filter((r: any) => r.overall != null && r.overall < 3).sort((a: any, b: any) => a.overall - b.overall)
   const kpis: any[] = [
     ['Mentors', String(nMentors), 'Active mentors in your view.'],
-    ['Deploy ready', String(deployReady), 'Mentors whose every assigned topic has all 4 prep steps complete.'],
     ['Avg readiness', `${Math.round(avgReadiness * 100)}%`, 'Average % of the 4 prep steps completed across all assigned topics.'],
     ['Avg rating', avgRating != null ? avgRating.toFixed(1) : '—', "Average of each mentor's rating to date (per-category averages, day one to now), out of 5."],
     ['At risk', String(atRisk), RISK_INFO],
@@ -4438,13 +4579,21 @@ function MentorAnalytics() {
       {kpis.map((k: any, i: number) => (
         <div key={i} style={{ background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 10, padding: '12px 14px' }}>
           <div style={{ fontSize: 12, color: '#69707d' }}>{k[0]}<InfoDot text={k[2]} /></div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: k[0] === 'At risk' && atRisk > 0 ? '#dc2626' : k[0] === 'Deploy ready' ? '#16a34a' : '#161a22' }}>{k[1]}</div>
+          <div style={{ fontSize: 24, fontWeight: 800, color: k[0] === 'At risk' && atRisk > 0 ? '#dc2626' : '#161a22' }}>{k[1]}</div>
         </div>
       ))}
     </div>
     <Card style={{ marginBottom: 16 }} styles={{ body: { padding: 16 } }}>
       <div style={{ fontWeight: 600, marginBottom: 12 }}>Rating history — day one to date<InfoDot text="Every rating each mentor has received since day one, with their subject and the dates. Expand a row to see the per-category average on top, then each day's scores." /></div>
-      <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor…" value={histQ} onChange={e => setHistQ(e.target.value)} style={{ maxWidth: 280, marginBottom: 12 }} />
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+        <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor…" value={histQ} onChange={e => setHistQ(e.target.value)} style={{ maxWidth: 260 }} />
+        <Select allowClear showSearch optionFilterProp="label" placeholder="All subjects" value={histSubj} onChange={(v) => setHistSubj(v ?? null)} style={{ minWidth: 190 }} options={histSubjOpts.map((s) => ({ value: s, label: s }))} />
+        <Select allowClear placeholder="All ratings" value={histBand} onChange={(v) => setHistBand(v ?? null)} style={{ minWidth: 210 }} options={RATING_BANDS} />
+        {(histSubj || histBand || histQ.trim()) && <>
+          <Tag color="blue">{histShown.length} mentor{histShown.length === 1 ? '' : 's'}</Tag>
+          <Button size="small" type="text" onClick={() => { setHistQ(''); setHistSubj(null); setHistBand(null) }}>Clear</Button>
+        </>}
+      </div>
       <Table size="small" rowKey="key" columns={histCols as any} dataSource={histShown} pagination={{ pageSize: 12 }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ratings yet — rate mentors from the Mentor Preparation Board." /> }}
         expandable={{
