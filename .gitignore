@@ -1,1 +1,14 @@
 node_modules
+
+# build output (rebuilt in the Docker image — no need to commit)
+dist
+
+# local env / secrets — supplied by Jenkins build args, not committed
+.env
+.env.local
+.env.*.local
+
+# misc
+*.log
+.vscode
+.idea

@@ -6,8 +6,10 @@ dist
 .idea
 coverage
 *.log
+.env
 .env.local
 .env.development.local
+Jenkinsfile
 Dockerfile*
 docker-compose*
 README.md
