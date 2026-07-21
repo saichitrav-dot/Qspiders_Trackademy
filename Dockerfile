@@ -1,7 +1,6 @@
 # ---- Build stage ----
 FROM node:22-alpine AS builder
 
-RUN npm install
 
 WORKDIR /app
 
