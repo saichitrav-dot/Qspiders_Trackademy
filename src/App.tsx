@@ -2802,6 +2802,7 @@ function MentorGeneration() {
   const [mentorF, setMentorF] = useState<any>(null)
   const [, setRatingByMentor] = useState<any>({}) // per-mentor overall rating (kept for future use; board shows per-sub-topic Technical)
   const [subRatings, setSubRatings] = useState<any>({}) // `${mentor_id}:${subtopic scope_id}` -> Technical avg (sub-topic level)
+  const [subRemarks, setSubRemarks] = useState<any>({}) // `${mentor_id}:${scope_id}` -> latest lead remark for that sub-topic
   const [dailyRating, setDailyRating] = useState<any>({}) // mentor_id -> Daily corporate etiquette avg (general, once a day)
   const [dailyHistory, setDailyHistory] = useState<any>({}) // mentor_id -> [{ date, avg, cats:{cat:score}, remark }] daily etiquette per day
   const [progPop, setProgPop] = useState(false)
@@ -2890,6 +2891,10 @@ function MentorGeneration() {
       // if an old row carried a stray scope_id).
       const subAgg: any = {}; rtData.forEach((x: any) => { if (x.score == null || !x.scope_id || !TECH_CAT_KEYS.has(x.category)) return; const k = x.mentor_id + ':' + x.scope_id; (subAgg[k] = subAgg[k] || []).push(Number(x.score)) })
       const sr: any = {}; Object.keys(subAgg).forEach((k) => sr[k] = subAgg[k].reduce((a: number, b: number) => a + b, 0) / subAgg[k].length); setSubRatings(sr)
+      // latest lead remark per sub-topic (shown inline on the board so the mentor sees it in context)
+      const remAgg: any = {}
+      rtData.forEach((x: any) => { if (!x.remarks || !x.scope_id || !TECH_CAT_KEYS.has(x.category)) return; const k = x.mentor_id + ':' + x.scope_id; const prev = remAgg[k]; if (!prev || String(x.rated_on) > String(prev.rated_on)) remAgg[k] = { rated_on: x.rated_on, text: x.remarks } })
+      setSubRemarks(remAgg)
       // Daily corporate etiquette (per mentor) = average of the ETIQUETTE-category ratings, by category
       // (not by null scope_id) so daily ratings always reflect regardless of any legacy scope_id.
       const dayAgg: any = {}; rtData.forEach((x: any) => { if (x.score == null || !DAILY_CAT_KEYS.has(x.category)) return; (dayAgg[x.mentor_id] = dayAgg[x.mentor_id] || []).push(Number(x.score)) })
@@ -2900,7 +2905,14 @@ function MentorGeneration() {
       const dhArr: any = {}; Object.keys(dh).forEach((m) => { dhArr[m] = Object.values(dh[m]).map((row: any) => { const vals = Object.values(row.cats) as number[]; return { ...row, avg: vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null } }).sort((a: any, b: any) => String(b.date).localeCompare(String(a.date))) })
       setDailyHistory(dhArr)
     }
-    if (isMentor) { const mr = await supabase.from('mentor_rating').select('category, score, rated_on, weight_snapshot, remarks').eq('mentor_id', person.id); setMyRatings(mr.error ? [] : (mr.data || [])) }
+    if (isMentor) {
+      const mr = await supabase.from('mentor_rating').select('category, score, rated_on, weight_snapshot, remarks, scope_id').eq('mentor_id', person.id)
+      const md = mr.error ? [] : (mr.data || []); setMyRatings(md)
+      // per-sub-topic lead remark so the mentor sees it inline on their board
+      const remAgg: any = {}
+      md.forEach((x: any) => { if (!x.remarks || !x.scope_id || !TECH_CAT_KEYS.has(x.category)) return; const k = person.id + ':' + x.scope_id; const prev = remAgg[k]; if (!prev || String(x.rated_on) > String(prev.rated_on)) remAgg[k] = { rated_on: x.rated_on, text: x.remarks } })
+      setSubRemarks(remAgg)
+    }
     // A mentor sees only their own prep (small). Admin/leads need EVERY prep row — page past
     // Supabase's 1000-row cap, otherwise mentors beyond the newest 1000 rows show "unmapped"
     // in the board, assign list and pipeline even though they are assigned.
@@ -3034,6 +3046,7 @@ function MentorGeneration() {
     { title: '4-step progress', width: 150, render: (_: any, r: any) => r.subtopic ? <SubtopicSteps mentorId={r.prep.mentor_id} subtopicId={r.subtopic.id} prog={subProg[r.prep.mentor_id + ':' + r.subtopic.id]} canEdit={isAdmin || (isMentor && r.prep.mentor_id === person.id)} onSaved={(stid: string, next: any) => setSubProg((m: any) => ({ ...m, [r.prep.mentor_id + ':' + stid]: { ...next } }))} /> : <span style={{ color: '#9aa1ad', fontSize: 12 }}>—</span> },
     { title: 'Status', width: 140, render: (_: any, r: any) => { if (!r.subtopic) return <span style={{ color: '#9aa1ad' }}>—</span>; const p = subProg[r.prep.mentor_id + ':' + r.subtopic.id] || {}; const n = MENTOR_STEPS.filter(s => p[s.key]).length; return n === 4 ? <Tag color="green">Done</Tag> : n === 0 ? <Tag>Not started</Tag> : <Tag color="orange">In progress ({n}/4)</Tag> } },
     { title: 'Technical', width: 100, render: (_: any, r: any) => { if (!r.subtopic) return <span style={{ color: '#9aa1ad' }}>—</span>; const v = subRatings[r.prep.mentor_id + ':' + r.subtopic.id]; return v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v.toFixed(1)}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> } },
+    { title: 'Lead remark', width: 240, render: (_: any, r: any) => { if (!r.subtopic) return <span style={{ color: '#9aa1ad' }}>—</span>; const rm = subRemarks[r.prep.mentor_id + ':' + r.subtopic.id]; return rm ? <ATooltip title={`Given ${dayjs(rm.rated_on).format('DD MMM YYYY')}`}><span style={{ fontSize: 12, color: '#374151' }}>{rm.text}</span></ATooltip> : <span style={{ color: '#9aa1ad' }}>—</span> } },
     { title: 'SLA', width: 100, onCell: grp, render: (_: any, r: any) => { if ((r.prep.review_status || 'open') === 'completed') return <span style={{ color: '#16a34a', fontSize: 12 }}>Done</span>; const dl = dayjs(r.prep.created_at).add(MENTOR_SLA_DAYS, 'day').diff(dayjs(), 'day'); return <span style={{ fontSize: 12, color: dl < 0 ? '#dc2626' : dl <= 1 ? '#d97706' : '#69707d' }}>{dl < 0 ? `${-dl}d overdue` : `${dl}d left`}</span> } },
     ...(!isMentor ? [{ title: 'Assigned lead', width: 150, onCell: grp, render: (_: any, r: any) => { const m = mentors.find((x: any) => x.id === r.prep.mentor_id); const lids = leadsMap[r.prep.mentor_id]?.length ? leadsMap[r.prep.mentor_id] : (m?.lead_id ? [m.lead_id] : []); return lids.length ? lids.map((lid: string) => nameById[lid] || '—').join(', ') : <span style={{ color: '#9aa1ad' }}>—</span> } }] : []),
     { title: '', width: 400, render: (_: any, r: any) => <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
