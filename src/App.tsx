@@ -1707,15 +1707,18 @@ function MentorRateDrawer({ row, onClose, onSaved }: any) {
     const scopeKey = subtopicId || topicId
     const dstr = (rateDate || dayjs()).format('YYYY-MM-DD')
     const data: any[] = MOCK_MENTOR_SUBTOPIC ? mockListRatings([mentorId]).slice().sort((a, b) => String(b.rated_on).localeCompare(String(a.rated_on)))
-      : ((await supabase.from('mentor_rating').select('category, score, rated_on, scope_id').eq('mentor_id', mentorId).order('rated_on', { ascending: false })).data || [])
+      : ((await supabase.from('mentor_rating').select('category, score, rated_on, scope_id, remarks').eq('mentor_id', mentorId).order('rated_on', { ascending: false })).data || [])
     const seen: any = {}
+    let pref = '' // restore the previously-saved remark for this exact rating so the lead can see / edit it
     data.forEach((x: any) => {
-      if (x.score == null || seen[x.category] !== undefined) return
       const c = RATING_CATS.find(rc => rc.key === x.category); if (!c) return
       const match = c.scope === 'topic' ? (x.scope_id === scopeKey) : (x.scope_id == null && String(x.rated_on).slice(0, 10) === dstr)
-      if (match) seen[x.category] = Number(x.score)
+      if (!match) return
+      if (x.score != null && seen[x.category] === undefined) seen[x.category] = Number(x.score)
+      // only restore a remark left on THIS mode's categories (don't leak a daily remark into the technical box)
+      if (!pref && x.remarks && modeCats.some(mc => mc.key === x.category)) pref = x.remarks // data is newest-first → latest remark
     })
-    setScores(seen); setReady(true)
+    setScores(seen); setRemark(pref); setReady(true)
   })() }, [rateDate])
   const setCats = modeCats.filter(c => scores[c.key] != null)
   const overall = setCats.length ? setCats.reduce((s, c) => s + scores[c.key], 0) / setCats.length : 0
@@ -3146,11 +3149,22 @@ function MentorGeneration() {
     const g: any = {}; myRatings.forEach((x: any) => { if (x.score != null) (g[x.category] = g[x.category] || []).push(Number(x.score)) })
     const lp: any = {}; Object.keys(g).forEach((c) => lp[c] = { score: g[c].reduce((a: number, b: number) => a + b, 0) / g[c].length })
     const cats = Object.keys(lp); const overall = cats.length ? cats.reduce((s, c) => s + lp[c].score, 0) / cats.length : null
-    const lastRemark = myRatings.slice().sort((a: any, b: any) => String(b.rated_on).localeCompare(String(a.rated_on))).find((x: any) => x.remarks)?.remarks
+    // every distinct remark the leads have left (deduped by date+text — the 3 technical cats share one remark), newest first
+    const remarkList: { date: string; text: string }[] = []
+    const seenR = new Set<string>()
+    myRatings.slice().sort((a: any, b: any) => String(b.rated_on).localeCompare(String(a.rated_on))).forEach((x: any) => {
+      if (!x.remarks) return; const k = String(x.rated_on).slice(0, 10) + '|' + x.remarks
+      if (seenR.has(k)) return; seenR.add(k); remarkList.push({ date: String(x.rated_on).slice(0, 10), text: x.remarks })
+    })
     return <Card title="My ratings" style={{ marginBottom: 16 }} extra={overall != null ? <Tag color="blue">Overall {overall.toFixed(1)} / 5</Tag> : null}>
       {cats.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ratings yet — your Lead will rate you as you progress." /> : <>
         {cats.map(c => <div key={c} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}><span style={{ width: 200, fontSize: 13, color: '#69707d' }}>{RATING_CAT_LABEL[c] || c}</span><div style={{ flex: 1, height: 8, borderRadius: 4, background: '#eef0f3' }}><div style={{ width: `${(lp[c].score / 5) * 100}%`, height: '100%', borderRadius: 4, background: PRIMARY }} /></div><span style={{ width: 28, textAlign: 'right', fontSize: 13, fontWeight: 600 }}>{lp[c].score.toFixed(1)}</span></div>)}
-        {lastRemark && <div style={{ background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginTop: 10 }}><b>Latest remark:</b> {lastRemark}</div>}
+        {remarkList.length > 0 && <div style={{ background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 8, padding: '10px 12px', fontSize: 13, marginTop: 10 }}>
+          <div style={{ fontWeight: 700, marginBottom: 6 }}>Remarks from your Lead</div>
+          {remarkList.slice(0, 6).map((r, i) => <div key={i} style={{ padding: '5px 0', borderTop: i ? '1px solid #eef0f3' : 'none' }}>
+            <span style={{ fontSize: 11, color: '#9aa1ad', marginRight: 8 }}>{dayjs(r.date).format('DD MMM YYYY')}</span>{r.text}
+          </div>)}
+        </div>}
       </>}
     </Card>
   })()
