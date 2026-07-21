@@ -18,6 +18,7 @@ pipeline {
         stage('Cloning the Code') {
             steps {
                 git branch: "${branch}", url: 'https://github.com/saichitrav-dot/Qspiders_Trackademy.git'
+		sh 'npm install'
             }
         }
 
