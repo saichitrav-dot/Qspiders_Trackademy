@@ -8,7 +8,7 @@ pipeline {
         // Client-side values — anon key is public and protected by RLS. For one source of
         // truth, create Jenkins "Secret text" credentials and use credentials('...') instead.
         VITE_SUPABASE_URL      = 'http://trackademy.onqtrack.com'
-        VITE_SUPABASE_ANON_KEY = 'eyJ0eXAi•••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••••'
+        VITE_SUPABASE_ANON_KEY = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiIsImlzcyI6InN1cGFiYXNlIiwiaWF0IjoxNzgyNzMxNTc3LCJleHAiOjIwOTgwOTE1Nzd9.swdgyQ7-b9nCyCc3Pbo8S7ivmD_4FqvAaKMjczgLwBQ'
     }
 
     stages {
