@@ -164,7 +164,11 @@ function AuthProvider({ children }: { children: any }) {
   const [loading, setLoading] = useState(true)
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
+    // Only react to a REAL sign-in / sign-out. Ignore token-refresh churn (same user) — otherwise a
+    // self-hosted auth-URL mismatch that refreshes the token constantly reloads person + remounts the
+    // whole app in a loop (continuous content_item/person/role_access fetches, nothing ever settles).
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) =>
+      setSession((prev: any) => (!!prev === !!s && prev?.user?.id === s?.user?.id) ? prev : s))
     return () => sub.subscription.unsubscribe()
   }, [])
   useEffect(() => {
@@ -233,11 +237,11 @@ function Shell({ children }: { children: any }) {
   const loc = useLocation(); const nav = useNavigate()
   const [allowed, setAllowed] = useState<any>(null)
   useEffect(() => {
-    if (!person) return
+    if (!person?.role) return
     supabase.from('role_access').select('menu_key, allowed').eq('role', person.role).then(({ data }: any) => {
       const m: any = {}; (data || []).forEach((r: any) => { m[r.menu_key] = r.allowed }); setAllowed(m)
     })
-  }, [person])
+  }, [person?.role]) // key on the primitive role, not the person object, so a re-loaded person can't re-fire this
   const items = [
     { key: '/dashboard', icon: <BarChartOutlined />, label: 'Dashboard' },
     { key: '/', icon: <DashboardOutlined />, label: 'Command Center' },
