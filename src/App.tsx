@@ -1299,14 +1299,18 @@ async function fetchAllItems() {
 // Fetch EVERY row from a table/view, paging past Supabase's 1000-row-per-request cap.
 // Without this, ownership lookups silently truncate and assigned items look "Unassigned".
 async function selectAll(table: string, columns: string): Promise<any[]> {
-  const out: any[] = []; const step = 1000; let from = 0
-  for (;;) {
-    const { data, error } = await supabase.from(table).select(columns).range(from, from + step - 1)
-    if (error || !data || !data.length) break
-    out.push(...data)
-    if (data.length < step) break
-    from += step
-  }
+  const step = 1000
+  // First page also asks for an EXACT count, so we can fetch the remaining pages in
+  // parallel instead of one-after-another (10 sequential round-trips -> ~1 wave).
+  const first = await supabase.from(table).select(columns, { count: 'exact' }).range(0, step - 1)
+  if (first.error || !first.data) return []
+  const out: any[] = first.data.slice()
+  const total = first.count ?? out.length
+  if (total <= step) return out
+  const reqs: any[] = []
+  for (let from = step; from < total; from += step) reqs.push(supabase.from(table).select(columns).range(from, from + step - 1))
+  const pages = await Promise.all(reqs)
+  for (const p of pages) if (!p.error && p.data) out.push(...p.data)
   return out
 }
 // Visibility predicate for a SCOPED (non "sees all") user. Items carry id/topicId/chapterId/subjectId/programId.
@@ -2810,6 +2814,7 @@ function MentorGeneration() {
   const [dailyRating, setDailyRating] = useState<any>({}) // mentor_id -> Daily corporate etiquette avg (general, once a day)
   const [dailyHistory, setDailyHistory] = useState<any>({}) // mentor_id -> [{ date, avg, cats:{cat:score}, remark }] daily etiquette per day
   const [progPop, setProgPop] = useState(false)
+  const [subjPop, setSubjPop] = useState<string | null>(null) // under-training subject widget → mentor details
   const [treeData, setTreeData] = useState<any[]>([])
   const [open, setOpen] = useState<any>(null)
   const [rateRow, setRateRow] = useState<any>(null)
@@ -3217,24 +3222,39 @@ function MentorGeneration() {
   if (isMentor) return <div><PageHead title="Mentor Management" />{kpis}{myCard}{boardCard}{drawers}</div>
   const subjectByMentor: any = {}
   rows.forEach((r: any) => { const s = r.topic?.chapter?.subject?.name; if (s && !subjectByMentor[r.mentor_id]) subjectByMentor[r.mentor_id] = s })
-  // v34: a mentor can hold MULTIPLE subjects — full set per mentor for the pipeline/subject metrics
+  // v34: a mentor can hold MULTIPLE subjects. Group by the MAIN subject (program level), NOT the
+  // sub-subject/topics inside it — so "Python Full stack" not each topic under it.
   const mentorSubjects: Record<string, Set<string>> = {}
-  rows.forEach((r: any) => { const s = r.topic?.chapter?.subject?.name; if (s) (mentorSubjects[r.mentor_id] = mentorSubjects[r.mentor_id] || new Set()).add(s) })
-  // per-subject count of mentors currently UNDER TRAINING (a mentor holding 2 subjects counts in both)
-  const subjTraining: Record<string, number> = {}
+  rows.forEach((r: any) => { const s = r.topic?.chapter?.subject?.main_subject?.name; if (s) (mentorSubjects[r.mentor_id] = mentorSubjects[r.mentor_id] || new Set()).add(s) })
+  // per-main-subject: distinct mentors currently UNDER TRAINING + the mentors themselves (for the click-through)
+  const subjTrainingMentors: Record<string, any[]> = {}
   mentors.forEach((m: any) => {
     const b = mentorBucket(m, activeDeployedSet as Set<string>, returnedSet as Set<string>)
     if (b !== 'in_training' && b !== 'upskilling') return
     const ss = mentorSubjects[m.id]
-    if (ss && ss.size) ss.forEach((s: string) => { subjTraining[s] = (subjTraining[s] || 0) + 1 })
-    else subjTraining['— no subject —'] = (subjTraining['— no subject —'] || 0) + 1
+    const keys = ss && ss.size ? [...ss] : ['— no subject —']
+    keys.forEach((s) => { (subjTrainingMentors[s] = subjTrainingMentors[s] || []).push(m) })
   })
-  const subjTrainingRows = Object.keys(subjTraining).sort((a, b) => subjTraining[b] - subjTraining[a])
+  const subjTrainingRows = Object.keys(subjTrainingMentors).sort((a, b) => subjTrainingMentors[b].length - subjTrainingMentors[a].length)
   const subjTrainingCards = subjTrainingRows.length > 0 && <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
     {subjTrainingRows.map((s) => <Col xs={12} md={8} lg={6} key={s}>
-      <Card styles={{ body: { padding: 14 } }}><Statistic title={<span style={{ fontSize: 12 }}>{s}</span>} value={subjTraining[s]} suffix={<span style={{ fontSize: 11, color: '#9aa1ad' }}>under training</span>} valueStyle={{ color: '#d97706', fontWeight: 800, fontSize: 22 }} /></Card>
+      <Card hoverable onClick={() => setSubjPop(s)} styles={{ body: { padding: 14 } }}><Statistic title={<span style={{ fontSize: 12 }}>{s}<span style={{ fontSize: 10, color: '#9aa1ad' }}> · tap for mentors</span></span>} value={subjTrainingMentors[s].length} suffix={<span style={{ fontSize: 11, color: '#9aa1ad' }}>under training</span>} valueStyle={{ color: '#d97706', fontWeight: 800, fontSize: 22 }} /></Card>
     </Col>)}
   </Row>
+  const subjTrainingModal = subjPop && (() => {
+    const list = (subjTrainingMentors[subjPop] || []).slice().sort((a: any, b: any) => String(a.full_name).localeCompare(String(b.full_name)))
+    return <Modal open title={<span><Tag color="geekblue">{subjPop}</Tag> {list.length} mentor{list.length === 1 ? '' : 's'} under training</span>} footer={null} width={600} onCancel={() => setSubjPop(null)}>
+      {list.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No mentors" /> : list.map((m: any) => {
+        const bkt = mentorBucket(m, activeDeployedSet as Set<string>, returnedSet as Set<string>)
+        const subs = mentorSubjects[m.id] ? [...mentorSubjects[m.id]] : []
+        return <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: '1px solid #f0f0f0' }}>
+          <span><b>{m.full_name}</b>{m.employee_id ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad', marginLeft: 8 }}>{m.employee_id}</span> : null}
+            <span style={{ display: 'block', fontSize: 11, color: '#9aa1ad' }}>{subs.join(' · ') || '—'}</span></span>
+          <Tag color={bkt === 'upskilling' ? 'purple' : 'orange'}>{bkt === 'upskilling' ? 'Upskilling' : 'Under training'}</Tag>
+        </div>
+      })}
+    </Modal>
+  })()
   return <div>
     <PageHead title="My workspace" sub="Your training topics and mentor management" />
     <Tabs defaultActiveKey="content" items={[
@@ -3252,7 +3272,7 @@ function MentorGeneration() {
       ]} /> },
       { key: 'analytics', label: 'Mentor analytics', children: <MentorAnalytics /> },
     ]} />
-    {drawers}
+    {drawers}{subjTrainingModal}
   </div>
 }
 
