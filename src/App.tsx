@@ -3490,9 +3490,8 @@ function WeeklyGoals() {
   const [topicMeta, setTopicMeta] = useState<any>({})        // topicId -> { name, subject, chapter, program, programId, ciIds:[] }
   const [treeByProgram, setTreeByProgram] = useState<any>({}) // programId -> antd treeData (Subject → Chapter → Topic)
   const [goals, setGoals] = useState<any[]>([])              // weekly_goal rows for the week (with topicIds)
-  const [recSet, setRecSet] = useState<Set<string>>(new Set())
-  const [editSet, setEditSet] = useState<Set<string>>(new Set())
-  const [recEver, setRecEver] = useState<Set<string>>(new Set()) // sub-topics recorded (Shooting/Review done) EVER, any week
+  const [recEver, setRecEver] = useState<Set<string>>(new Set()) // sub-topics recorded (Shooting OR Review done) EVER, any week
+  const [recFull, setRecFull] = useState<Set<string>>(new Set()) // FULLY recorded: Shooting AND Shooting-Review both done → drop off the list
   const [editEver, setEditEver] = useState<Set<string>>(new Set()) // sub-topics edited (Editing done) EVER, any week
   const [prevGoals, setPrevGoals] = useState<any[]>([])           // the PREVIOUS week's goals (for carry-forward)
   const [ownerMap, setOwnerMap] = useState<any>({})  // content_item_id -> trainer_id (who owns the sub-topic)
@@ -3503,7 +3502,6 @@ function WeeklyGoals() {
   const [saving, setSaving] = useState(false)
   const [missing, setMissing] = useState(false)
   const weekStart = week.format('YYYY-MM-DD')
-  const weekEnd = week.add(7, 'day').format('YYYY-MM-DD')
 
   // static: programs, per-sub-topic (content_item) meta, and the create-picker trees down to sub-topic
   async function loadStatic() {
@@ -3541,9 +3539,14 @@ function WeeklyGoals() {
     // sub-topics that are ALREADY completed (any week) — recording = Shooting or Shooting Review done,
     // editing = Editing done. Used to drop them from future goals (never carry / re-select a done item).
     const allI = await fetchAllItems()
-    const re = new Set<string>(); const ee = new Set<string>()
-    allI.forEach((it: any) => { if (it.byCode.SHOOTING?.status === 'Completed' || it.byCode.SHOOT_REVIEW?.status === 'Completed') re.add(it.id); if (it.byCode.EDITING?.status === 'Completed') ee.add(it.id) })
-    setRecEver(re); setEditEver(ee)
+    const re = new Set<string>(); const ee = new Set<string>(); const rf = new Set<string>()
+    allI.forEach((it: any) => {
+      const shoot = it.byCode.SHOOTING?.status === 'Completed', rev = it.byCode.SHOOT_REVIEW?.status === 'Completed'
+      if (shoot || rev) re.add(it.id)   // achieved (recording milestone hit)
+      if (shoot && rev) rf.add(it.id)   // FULLY recorded → hidden from the goals list (still counted as achieved)
+      if (it.byCode.EDITING?.status === 'Completed') ee.add(it.id)
+    })
+    setRecEver(re); setEditEver(ee); setRecFull(rf)
   }
   // week-bound: the goals plus what was actually recorded / edited that week
   async function loadWeek() {
@@ -3561,20 +3564,9 @@ function WeeklyGoals() {
       const pg = await supabase.from('weekly_goal').select('id, program_id, week_start, kind, weekly_goal_item(content_item_id)').eq('week_start', prevStart)
       setPrevGoals(pg.error ? [] : (pg.data || []).map((x: any) => ({ ...x, itemIds: (x.weekly_goal_item || []).map((t: any) => t.content_item_id) })))
     }
-    // recording goals → a sub-topic is achieved IN THE WEEK it was RECORDED: its Shooting stage
-    // is Completed (recording done → the sub-topic reaches "Shooting Review"), OR its Shooting
-    // Review stage is Completed. Attribution is week-strict: the completion counts only in the
-    // week its completed_on falls in, so an item finished in an earlier week shows completed in
-    // THAT earlier week, not carried forward into later weeks.
-    const sr = await supabase.from('stage').select('id, code').in('code', ['SHOOTING', 'SHOOT_REVIEW'])
-    const recStageIds = (sr.data || []).map((s: any) => s.id)
-    let recRows: any[] = []
-    if (recStageIds.length) { const is = await supabase.from('item_stage').select('content_item_id, completed_on').in('stage_id', recStageIds).eq('status', 'Completed').gte('completed_on', weekStart).lt('completed_on', weekEnd); recRows = is.data || [] }
-    setRecSet(new Set(recRows.filter((x: any) => x.content_item_id).map((x: any) => x.content_item_id)))
-    let et: any = await supabase.from('editing_task').select('content_item_id, completed_at, final_output').in('final_output', FO_DONE)
-    if (et.error) et = await supabase.from('editing_task').select('content_item_id, final_output').in('final_output', FO_DONE)
-    const wStart = week.toISOString(); const wEnd = week.add(7, 'day').toISOString()
-    setEditSet(new Set((et.data || []).filter((e: any) => e.content_item_id && (e.completed_at === undefined || (e.completed_at && e.completed_at >= wStart && e.completed_at < wEnd))).map((e: any) => e.content_item_id)))
+    // Achievement is now cumulative (recEver/editEver, loaded in loadStatic) — an item counts as
+    // achieved once its Shooting/Shooting-Review (or Editing) stage is Completed, in any week — so
+    // there is no per-week completion set to compute here.
     setBusy(false)
   }
   useEffect(() => { (async () => { await loadStatic(); setLoaded(true) })() }, [])
@@ -3592,8 +3584,20 @@ function WeeklyGoals() {
   }, [programId, kind, goals, prevGoals, recEver, editEver])
 
   // each goal item is a SUB-TOPIC (content_item): met when it was recorded / edited that week
-  const goalItems = (g: any) => (g?.itemIds || []).map((id: string) => ({ id, ...(topicMeta[id] || { name: '(removed sub-topic)' }), trainer: names[ownerMap[id]] || null, met: (kind === 'recording' ? recSet : editSet).has(id) }))
-    .sort((a: any, b: any) => (a.subject || '').localeCompare(b.subject || '') || (a.topicName || '').localeCompare(b.topicName || '') || (a.name || '').localeCompare(b.name || ''))
+  // A goal sub-topic is ACHIEVED once its recording (Shooting OR Shooting-Review) / editing stage is
+  // Completed — cumulatively, regardless of which week the completion actually happened (recEver/editEver).
+  // If it is NOT yet achieved but was already targeted in the PREVIOUS week's goal, it rolled over
+  // unfinished, so it is shown as "Carried forward" instead of a plain "Pending".
+  const goalItems = (g: any) => {
+    const done = kind === 'recording' ? recEver : editEver
+    const prevSet = new Set<string>((prevGoals.find((x: any) => x.program_id === g?.program_id && x.kind === kind)?.itemIds) || [])
+    return (g?.itemIds || []).map((id: string) => { const met = done.has(id); const fromPrev = prevSet.has(id); return { id, ...(topicMeta[id] || { name: '(removed sub-topic)' }), trainer: names[ownerMap[id]] || null, met, fromPrev, carried: !met && fromPrev } })
+      .sort((a: any, b: any) => (a.subject || '').localeCompare(b.subject || '') || (a.topicName || '').localeCompare(b.topicName || '') || (a.name || '').localeCompare(b.name || ''))
+  }
+  // Rows to DISPLAY in the status tables: a FRESH (not carried) fully-completed item drops off
+  // (recording = both Shooting & Shooting-Review done; editing = Editing done). A CARRIED-FORWARD item
+  // always stays visible — shown green as Achieved once completed. Hidden items still count in metrics.
+  const shownItems = (g: any) => goalItems(g).filter((t: any) => { const fullyDone = kind === 'recording' ? recFull.has(t.id) : editEver.has(t.id); return !fullyDone || t.fromPrev })
   // goal picker with already-completed sub-topics removed (keep any that are already in this week's goal)
   const pickerDone = kind === 'recording' ? recEver : editEver
   const pickerKeep = new Set<string>((goals.find((x: any) => x.program_id === programId && x.kind === kind)?.itemIds) || [])
@@ -3637,7 +3641,7 @@ function WeeklyGoals() {
   const itemCols = [
     { title: 'Sub-topic', render: (_: any, r: any) => <div><div style={{ fontWeight: 600 }}>{r.name}</div><div style={{ fontSize: 11, color: '#9aa1ad' }}>{[r.subject, r.chapter, r.topicName].filter(Boolean).join(' › ')}</div></div> },
     { title: 'Trainer', width: 170, render: (_: any, r: any) => r.trainer ? <span><Avatar size={20} style={{ background: '#c2410c', marginRight: 6, fontSize: 10 }}>{(r.trainer || '?')[0]}</Avatar>{r.trainer}</span> : <span style={{ color: '#9aa1ad' }}>Unassigned</span> },
-    { title: 'Status', dataIndex: 'met', width: 150, render: (v: boolean) => v ? <Tag color="green">Achieved ({kindLabel})</Tag> : <Tag color="orange">Pending</Tag> },
+    { title: 'Status', width: 170, render: (_: any, r: any) => r.met ? <Tag color="green">Achieved ({kindLabel})</Tag> : r.carried ? <Tag color="gold">Carried forward</Tag> : <Tag color="orange">Pending</Tag> },
   ]
   const progCols = [
     { title: 'Program', dataIndex: 'program_id', render: (pid: string) => <b>{programs.find((p: any) => p.id === pid)?.name || '—'}</b> },
@@ -3697,12 +3701,12 @@ function WeeklyGoals() {
 
       {!missing && (programId
         ? <Card title={`${programs.find((p: any) => p.id === programId)?.name || 'Program'} — sub-topic status`} size="small">
-            {selGoal ? <Table rowKey="id" size="small" columns={itemCols as any} dataSource={goalItems(selGoal)} pagination={{ pageSize: 15 }} loading={busy} />
+            {selGoal ? <Table rowKey="id" size="small" columns={itemCols as any} dataSource={shownItems(selGoal)} pagination={{ pageSize: 15 }} loading={busy} />
               : <Empty description={`No ${kind} goal set for this program this week.`} />}
           </Card>
         : <Card title="All programs — this week" size="small">
             <Table rowKey="id" size="small" columns={progCols as any} dataSource={kindGoals} loading={busy} pagination={false}
-              expandable={{ expandedRowRender: (g: any) => <Table rowKey="id" size="small" columns={itemCols as any} dataSource={goalItems(g)} pagination={false} /> }}
+              expandable={{ expandedRowRender: (g: any) => <Table rowKey="id" size="small" columns={itemCols as any} dataSource={shownItems(g)} pagination={false} /> }}
               locale={{ emptyText: <Empty description={`No ${kind} goals set for any program this week.`} /> }} />
           </Card>)}
     </div>

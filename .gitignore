@@ -12,3 +12,5 @@ dist
 *.log
 .vscode
 .idea
+PERF_01_nginx_gzip.conf
+*.sql
