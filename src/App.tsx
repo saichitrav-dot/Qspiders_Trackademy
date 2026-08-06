@@ -2176,7 +2176,7 @@ const LIFECYCLE_COLOR: Record<string, string> = Object.fromEntries(MENTOR_LIFECY
 const MENTOR_EXITED = new Set(['terminated', 'dropout'])
 // Mentors deployed / Back to bench. A deployment needs a Manager's prior approval (pending → approved).
 // A mentor who finished training and isn't on an active deployment is "on the bench" (available to map).
-function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
+function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any) {
   const { person } = useAuth()
   const { message: msg } = AntApp.useApp()
   const isManager = person?.role === 'manager' || person?.role === 'admin'
@@ -2193,17 +2193,27 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
   const [bModal, setBModal] = useState<any>(null)   // { dep, batch? } while the add/edit-batch modal is open
   const [bForm, setBForm] = useState<any>({})
   const [rCell, setRCell] = useState<any>(null) // Back-to-bench: { subject, band } whose mentor names are open
-  const nameById: any = Object.fromEntries(mentors.map((m: any) => [m.id, m.full_name]))
-  const empById: any = Object.fromEntries(mentors.map((m: any) => [m.id, m.employee_id || '']))
-  const mentorIds = new Set(mentors.map((m: any) => m.id))
+  const [internalTasks, setInternalTasks] = useState<any[]>([]) // mentor_internal_task rows (v37)
+  const [itModal, setItModal] = useState<any>(null) // { mentor_id, name, task? } internal-task modal
+  const [itForm, setItForm] = useState<any>({})
+  // Trainers can be deployed too (v37 request) — treat mentors + active trainers as one "people" set
+  // for the deployment picker, the name/id maps, and the deployed/bench tables.
+  const people = [...mentors, ...(trainers || [])]
+  const roleById: any = Object.fromEntries(people.map((m: any) => [m.id, m.role]))
+  const nameById: any = Object.fromEntries(people.map((m: any) => [m.id, m.full_name]))
+  const empById: any = Object.fromEntries(people.map((m: any) => [m.id, m.employee_id || '']))
+  const mentorIds = new Set(people.map((m: any) => m.id))
   // deployment_id -> ALL its batches (same trainer can run several batches on the same date)
   const batchesByDep: any = batches.reduce((a: any, b: any) => { (a[b.deployment_id] = a[b.deployment_id] || []).push(b); return a }, {})
+  const itByMentor: any = internalTasks.reduce((a: any, t: any) => { (a[t.mentor_id] = a[t.mentor_id] || []).push(t); return a }, {})
   async function load() {
     if (MOCK_MENTOR_SUBTOPIC) { setDeps(mockListDeployments()); setBatches(mockListOnlineBatches()); return }
     const r = await supabase.from('mentor_deployment').select('*').order('created_at', { ascending: false })
     setDeps(r.error ? [] : (r.data || []))
     const b = await supabase.from('mentor_online_batch').select('*')
     setBatches(b.error ? [] : (b.data || [])) // absent until v35 is applied → just no batch details
+    const it = await supabase.from('mentor_internal_task').select('*').order('created_at', { ascending: false })
+    setInternalTasks(it.error ? [] : (it.data || [])) // absent until v37 is applied → just no internal tasks
   }
   // average of the 3 deployment-feedback dimensions per mentor (to display in Back-to-bench)
   const FB_KEYS = FEEDBACK_CATS.map(c => c.key)
@@ -2279,6 +2289,30 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
     else { const w = await supabase.from('mentor_online_batch').delete().eq('id', b.id); if (w.error) { msg.error(w.error.message); return } }
     msg.success('Batch removed'); load()
   }
+  // ---- internal tasks (v37): bench mentors doing internal work — kept SEPARATE from deployments,
+  // so an open internal task does NOT count the mentor as deployed; they stay on the bench. ----
+  function openInternalTask(m: any, task?: any) {
+    setItModal({ mentor_id: m.id, name: m.full_name, task })
+    setItForm(task
+      ? { task: task.task || '', remarks: task.remarks || '', from_date: task.from_date ? dayjs(task.from_date) : null, to_date: task.to_date ? dayjs(task.to_date) : null, status: task.status || 'open' }
+      : { task: '', remarks: '', from_date: null, to_date: null, status: 'open' })
+  }
+  async function saveInternalTask() {
+    if (!itForm.task?.trim()) { msg.warning('Task is required.'); return }
+    if (MOCK_MENTOR_SUBTOPIC) { msg.info('Internal tasks are not available in mock mode.'); setItModal(null); setItForm({}); return }
+    const rec: any = { mentor_id: itModal.mentor_id, task: itForm.task.trim(), remarks: itForm.remarks?.trim() || null, from_date: itForm.from_date ? itForm.from_date.format('YYYY-MM-DD') : null, to_date: itForm.to_date ? itForm.to_date.format('YYYY-MM-DD') : null, status: itForm.status || 'open' }
+    const w = itModal.task
+      ? await supabase.from('mentor_internal_task').update({ ...rec, updated_at: new Date().toISOString() }).eq('id', itModal.task.id)
+      : await supabase.from('mentor_internal_task').insert({ ...rec, created_by: person?.id || null })
+    if (w.error) { msg.error(/mentor_internal_task|relation|does not exist/.test(w.error.message) ? 'Run RecTrack_v37_mentor_internal_task.sql first.' : w.error.message); return }
+    msg.success(itModal.task ? 'Internal task updated ✓' : 'Internal task added ✓'); setItModal(null); setItForm({}); load()
+  }
+  async function deleteInternalTask(t: any) {
+    if (MOCK_MENTOR_SUBTOPIC) return
+    const w = await supabase.from('mentor_internal_task').delete().eq('id', t.id)
+    if (w.error) { msg.error(w.error.message); return }
+    msg.success('Internal task removed'); load()
+  }
   async function endDeployment(d: any) {
     if (MOCK_MENTOR_SUBTOPIC) mockUpdateDeployment(d.id, { status: 'completed' })
     else { const u = await supabase.from('mentor_deployment').update({ status: 'completed', updated_at: new Date().toISOString() }).eq('id', d.id); if (u.error) { msg.error(u.error.message); return } }
@@ -2291,7 +2325,7 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
   const daysOf = (d: any) => (d.from_date && d.to_date) ? dayjs(d.to_date).diff(dayjs(d.from_date), 'day') + 1 : '—'
   const lbl: any = { fontSize: 12, fontWeight: 600, color: '#69707d', margin: '10px 0 4px' }
   const addModal = add && <Modal open title={editId ? `Edit deployment · ${add.name || ''}` : add.name ? `Deploy ${add.name}` : 'New deployment'} okText={editId ? 'Save changes' : 'Request (needs Manager approval)'} onOk={submitAdd} onCancel={() => { setAdd(null); setEditId(null); setForm({}) }} destroyOnClose>
-    {!add.mentor_id && <><div style={lbl}>Mentor</div><Select showSearch optionFilterProp="label" style={{ width: '100%' }} placeholder="Select a mentor" value={form.mentor_id} onChange={(v) => setForm((f: any) => ({ ...f, mentor_id: v, subject: subjectOf[v] || f.subject }))} options={mentors.map((m: any) => ({ value: m.id, label: m.full_name }))} /></>}
+    {!add.mentor_id && <><div style={lbl}>Mentor / Trainer</div><Select showSearch optionFilterProp="label" style={{ width: '100%' }} placeholder="Select a mentor or trainer" value={form.mentor_id} onChange={(v) => setForm((f: any) => ({ ...f, mentor_id: v, subject: subjectOf[v] || f.subject }))} options={people.map((m: any) => ({ value: m.id, label: m.full_name + (m.role === 'trainer' ? ' (Trainer)' : '') }))} /></>}
     <div style={lbl}>Subject</div>
     <Input placeholder="Subject (e.g. Java, Python, Testing)" value={form.subject || ''} onChange={(e) => setForm((f: any) => ({ ...f, subject: e.target.value }))} />
     <div style={lbl}>Deployed to</div>
@@ -2305,7 +2339,7 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
     {!editId && <div style={{ fontSize: 11, color: '#9aa1ad', marginTop: 8 }}>This creates a request. A Manager must approve it before the mentor is marked deployed.</div>}
   </Modal>
   const mDeps = fb ? (deps || []).filter((d: any) => d.mentor_id === fb.mentor_id && (d.status === 'approved' || d.status === 'completed')) : []
-  const depLabel = (d: any) => `${d.deployment_type}${d.subject ? ' · ' + d.subject : ''}${d.from_date ? ' · ' + dayjs(d.from_date).format('DD MMM') : ''}${d.to_date ? '–' + dayjs(d.to_date).format('DD MMM') : ''}`
+  const depLabel = (d: any) => `${d.deployment_type}${d.subject ? ' · ' + d.subject : ''}${d.details ? ' · ' + d.details : ''}${d.from_date ? ' · ' + dayjs(d.from_date).format('DD MMM') : ''}${d.to_date ? '–' + dayjs(d.to_date).format('DD MMM') : ''}`
   const feedbackModal = fb && <Modal open title={`Feedback · ${fb.name}`} okText="Save feedback" okButtonProps={{ disabled: !fbDep }} onOk={submitFeedback} onCancel={() => { setFb(null); setFbDep(null); setFbScores({}) }} destroyOnClose>
     {mDeps.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Deploy this mentor first — feedback is captured per return (college / branch / online)." />
       : <>
@@ -2336,11 +2370,25 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
     <Input.TextArea rows={2} placeholder="Remarks for this batch…" value={bForm.remarks || ''} onChange={(e) => setBForm((f: any) => ({ ...f, remarks: e.target.value }))} />
   </Modal>
 
+  const internalTaskModal = itModal && <Modal open title={`${itModal.task ? 'Edit' : 'New'} internal task · ${itModal.name || ''}`} okText={itModal.task ? 'Save task' : 'Add task'} onOk={saveInternalTask} onCancel={() => { setItModal(null); setItForm({}) }} destroyOnClose>
+    <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 4 }}>Internal work while on the bench — the mentor stays available (not counted as deployed).</div>
+    <div style={lbl}>Task</div>
+    <Input placeholder="e.g. Content revamp — Python OOP module" value={itForm.task || ''} onChange={(e) => setItForm((f: any) => ({ ...f, task: e.target.value }))} />
+    <div style={lbl}>Remarks</div>
+    <Input.TextArea rows={3} placeholder="Remarks / details of the internal task…" value={itForm.remarks || ''} onChange={(e) => setItForm((f: any) => ({ ...f, remarks: e.target.value }))} />
+    <Row gutter={8}>
+      <Col span={12}><div style={lbl}>From date</div><DatePicker style={{ width: '100%' }} value={itForm.from_date} onChange={(v) => setItForm((f: any) => ({ ...f, from_date: v }))} /></Col>
+      <Col span={12}><div style={lbl}>To date</div><DatePicker style={{ width: '100%' }} value={itForm.to_date} onChange={(v) => setItForm((f: any) => ({ ...f, to_date: v }))} /></Col>
+    </Row>
+    <div style={lbl}>Status</div>
+    <Select style={{ width: '100%' }} value={itForm.status || 'open'} onChange={(v) => setItForm((f: any) => ({ ...f, status: v }))} options={[{ value: 'open', label: 'Open' }, { value: 'done', label: 'Done' }]} />
+  </Modal>
+
   if (mode === 'bench') {
     // Back to bench = has COMPLETED any training (Branch / Online / College / Corporate / College grooming)
     // and is not currently on an active deployment → available to be mapped again or upskilled.
     const returned = new Set(myDeps.filter((d: any) => d.status === 'completed').map((d: any) => d.mentor_id))
-    const bench = mentors.filter((m: any) => !activeDeployed.has(m.id) && returned.has(m.id))
+    const bench = people.filter((m: any) => !activeDeployed.has(m.id) && returned.has(m.id))
     // A bench mentor's rating = mean of the deployment-feedback scores (student / external coordinator /
     // reporting lead). Each deployment carries a SUBJECT, so ratings are shown PER SUBJECT: one row per
     // subject × a 5→1 band per column. The same mentor can sit in different bands for different subjects.
@@ -2391,20 +2439,32 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
     })()
     const benchShown = ql ? bench.filter((m: any) => String(m.full_name || '').toLowerCase().includes(ql)) : bench
     const cols = [
-      { title: 'Mentor', dataIndex: 'full_name', render: (v: string) => <b>{v}</b> },
+      { title: 'Mentor', dataIndex: 'full_name', render: (_: any, m: any) => <span><b>{m.full_name}</b>{m.role === 'trainer' ? <Tag color="blue" style={{ marginLeft: 6 }}>Trainer</Tag> : null}</span> },
       { title: 'Subject', render: (_: any, m: any) => subjectOf[m.id] ? <Tag color="geekblue">{subjectOf[m.id]}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
       { title: 'Rating · all subjects', width: 150, render: (_: any, m: any) => { const a = fbAvgOf(m.id); return a != null ? <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'}>{a.toFixed(2)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> } },
       { title: 'Status', render: (_: any, m: any) => returned.has(m.id) ? <Tag color="blue">Returned from deployment</Tag> : <Tag>Available</Tag> },
       { title: 'Feedback (per completed training)', render: (_: any, m: any) => {
         const mDeps = (deps || []).filter((d: any) => d.mentor_id === m.id && (d.status === 'approved' || d.status === 'completed') && feedbackByDep[d.id])
         if (!mDeps.length) return <span style={{ color: '#9aa1ad' }}>—</span>
-        return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{mDeps.map((d: any) => <div key={d.id}>
-          <div style={{ fontSize: 11, color: '#69707d' }}>{d.deployment_type}{d.subject ? ' · ' + d.subject : ''}</div>
-          <span style={{ display: 'flex', gap: 4, marginTop: 2 }}>{FEEDBACK_CATS.map(c => { const v = feedbackByDep[d.id]?.[c.key]; return <ATooltip key={c.key} title={c.label}><Tag style={{ margin: 0 }} color={v == null ? 'default' : v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v != null ? v.toFixed(1) : '—'}</Tag></ATooltip> })}</span>
+        return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>{mDeps.map((d: any) => <div key={d.id} style={{ display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>
+          <ATooltip title={`${d.deployment_type}${d.subject ? ' · ' + d.subject : ''}${d.details ? ' · ' + d.details : ''}`}><Tag color="geekblue" style={{ margin: 0, fontWeight: 700 }}>{d.details || `${d.deployment_type}${d.subject ? ' · ' + d.subject : ''}`}</Tag></ATooltip>
+          <span style={{ display: 'flex', gap: 4 }}>{FEEDBACK_CATS.map(c => { const v = feedbackByDep[d.id]?.[c.key]; return <ATooltip key={c.key} title={c.label}><Tag style={{ margin: 0 }} color={v == null ? 'default' : v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v != null ? v.toFixed(1) : '—'}</Tag></ATooltip> })}</span>
         </div>)}</div>
       } },
-      { title: '', width: 250, render: (_: any, m: any) => <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+      { title: 'Internal tasks', render: (_: any, m: any) => {
+        const list = itByMentor[m.id] || []
+        if (!list.length) return <span style={{ color: '#9aa1ad' }}>—</span>
+        return <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>{list.map((t: any) => <div key={t.id} style={{ fontSize: 12 }}>
+          <Tag color={t.status === 'done' ? 'green' : 'orange'} style={{ marginRight: 4 }}>{t.status === 'done' ? 'Done' : 'Open'}</Tag>
+          <b>{t.task}</b>{t.remarks ? <span style={{ color: '#9aa1ad' }}> — {t.remarks}</span> : null}
+          {(t.from_date || t.to_date) ? <span style={{ color: '#9aa1ad', fontSize: 11 }}> ({t.from_date ? dayjs(t.from_date).format('DD MMM') : '…'}{t.to_date ? '–' + dayjs(t.to_date).format('DD MMM') : ''})</span> : null}
+          <a style={{ marginLeft: 6, fontSize: 11 }} onClick={() => openInternalTask(m, t)}>edit</a>
+          <Popconfirm title="Remove this internal task?" okText="Remove" okButtonProps={{ danger: true }} onConfirm={() => deleteInternalTask(t)}><a style={{ marginLeft: 8, fontSize: 11, color: '#dc2626' }}>remove</a></Popconfirm>
+        </div>)}</div>
+      } },
+      { title: '', width: 330, render: (_: any, m: any) => <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
         <Button size="small" icon={<StarOutlined />} onClick={() => { setFbScores({}); setFbDep(null); setFb({ mentor_id: m.id, name: m.full_name }) }}>Feedback</Button>
+        <Button size="small" onClick={() => openInternalTask(m)}>Internal task</Button>
         <Button size="small" type="primary" onClick={() => { setForm({ subject: subjectOf[m.id] || '' }); setAdd({ mentor_id: m.id, name: m.full_name }) }}>Map / Deploy</Button>
       </span> },
     ]
@@ -2412,10 +2472,10 @@ function MentorDeployments({ mentors, mode, subjectOf = {} }: any) {
       {ratingCards}
       <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 280, marginBottom: 12 }} />
       <Table size="middle" rowKey="id" columns={cols as any} dataSource={benchShown} pagination={{ pageSize: 12 }} scroll={{ x: 'max-content' }} locale={{ emptyText: <Empty description={ql ? `No mentors match “${q}”` : 'No mentors back on the bench yet — nobody has completed a training and returned.'} /> }} />
-      {addModal}{feedbackModal}{ratingModal}</>
+      {addModal}{feedbackModal}{ratingModal}{internalTaskModal}</>
   }
   const cols = [
-    { title: 'Mentor', dataIndex: 'mentor_id', render: (v: string) => <b>{nameById[v] || '—'}</b> },
+    { title: 'Mentor', dataIndex: 'mentor_id', render: (v: string) => <span><b>{nameById[v] || '—'}</b>{roleById[v] === 'trainer' ? <Tag color="blue" style={{ marginLeft: 6 }}>Trainer</Tag> : null}</span> },
     { title: 'Subject', dataIndex: 'subject', render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
     { title: 'Deployed to', dataIndex: 'deployment_type', render: (v: string) => <Tag color="blue">{v}</Tag> },
     { title: 'From', dataIndex: 'from_date', render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
@@ -2795,6 +2855,7 @@ function MentorGeneration() {
   const canManage = isAdmin || OWNER_ROLES.includes(person?.role)
   const { message: msg } = AntApp.useApp()
   const [mentors, setMentors] = useState<any[]>([])
+  const [deployTrainers, setDeployTrainers] = useState<any[]>([]) // active trainers — also deployable (v37)
   const [pubTopics, setPubTopics] = useState<any[]>([])
   const [myRatings, setMyRatings] = useState<any[]>([])
   const [rows, setRows] = useState<any>(null)
@@ -2840,6 +2901,8 @@ function MentorGeneration() {
     // mock mode: overlay locally-saved training status so the sandbox is fully interactive (no prod writes)
     if (MOCK_MENTOR_SUBTOPIC) { const ms = mockAllMentorStatus(); visMentors.forEach((m: any) => { if (ms[m.id]) { m.mentor_status = ms[m.id].status; m.mentor_status_reason = ms[m.id].reason } }) }
     setMentors(visMentors)
+    // active trainers are deployable too (v37) — offered in the deployment picker and shown in the tabs
+    setDeployTrainers((p.data || []).filter((x: any) => x.role === 'trainer' && x.is_active))
     // deployment summary for pipeline counts (v34) — deployed / back-to-bench are derived from these
     if (MOCK_MENTOR_SUBTOPIC) setDeps(mockListDeployments())
     else { const dp = await supabase.from('mentor_deployment').select('mentor_id, status'); setDeps(dp.error ? [] : (dp.data || [])) }
@@ -2898,8 +2961,19 @@ function MentorGeneration() {
       // Technical (per sub-topic) = average of the TECHNICAL-category ratings tied to that sub-topic.
       // Keyed by mentor+scope_id, but ONLY technical categories count (etiquette never lands here even
       // if an old row carried a stray scope_id).
-      const subAgg: any = {}; rtData.forEach((x: any) => { if (x.score == null || !x.scope_id || !TECH_CAT_KEYS.has(x.category)) return; const k = x.mentor_id + ':' + x.scope_id; (subAgg[k] = subAgg[k] || []).push(Number(x.score)) })
-      const sr: any = {}; Object.keys(subAgg).forEach((k) => sr[k] = subAgg[k].reduce((a: number, b: number) => a + b, 0) / subAgg[k].length); setSubRatings(sr)
+      // Use the LATEST score per (sub-topic, category) — most recent rated_on — then average across the
+      // technical categories. This matches the drawer's "Average (this rating)" and its prefill (both show
+      // the latest), so re-rating a sub-topic updates the column instead of being diluted by older scores.
+      // Full history is still kept in mentor_rating for trends / Topic History.
+      const subLatest: any = {} // "mentor:scope_id" -> { category -> { score, rated_on } }
+      rtData.forEach((x: any) => {
+        if (x.score == null || !x.scope_id || !TECH_CAT_KEYS.has(x.category)) return
+        const k = x.mentor_id + ':' + x.scope_id
+        const cur = subLatest[k] || (subLatest[k] = {})
+        const prev = cur[x.category]
+        if (!prev || String(x.rated_on) >= String(prev.rated_on)) cur[x.category] = { score: Number(x.score), rated_on: x.rated_on }
+      })
+      const sr: any = {}; Object.keys(subLatest).forEach((k) => { const v = (Object.values(subLatest[k]) as any[]).map((o: any) => o.score); sr[k] = v.reduce((a: number, b: number) => a + b, 0) / v.length }); setSubRatings(sr)
       // latest lead remark per sub-topic (shown inline on the board so the mentor sees it in context)
       const remAgg: any = {}
       rtData.forEach((x: any) => { if (!x.remarks || !x.scope_id || !TECH_CAT_KEYS.has(x.category)) return; const k = x.mentor_id + ':' + x.scope_id; const prev = remAgg[k]; if (!prev || String(x.rated_on) > String(prev.rated_on)) remAgg[k] = { rated_on: x.rated_on, text: x.remarks } })
@@ -3264,8 +3338,8 @@ function MentorGeneration() {
         { key: 'prep', label: 'Preparation board', children: <div>{assignCard}{boardCard}</div> },
         { key: 'daily', label: 'Daily corporate etiquette', children: dailyCard },
       ]} /></div> },
-      { key: 'deployed', label: `Mentors deployed (${bcount.deployed || 0})`, children: <MentorDeployments mentors={mentors} mode="deployed" subjectOf={subjectByMentor} /> },
-      { key: 'bench', label: `Mentors Back to bench (${bcount.bench || 0})`, children: <MentorDeployments mentors={mentors} mode="bench" subjectOf={subjectByMentor} /> },
+      { key: 'deployed', label: `Mentors deployed (${bcount.deployed || 0})`, children: <MentorDeployments mentors={mentors} trainers={deployTrainers} mode="deployed" subjectOf={subjectByMentor} /> },
+      { key: 'bench', label: `Mentors Back to bench (${bcount.bench || 0})`, children: <MentorDeployments mentors={mentors} trainers={deployTrainers} mode="bench" subjectOf={subjectByMentor} /> },
       { key: 'holidays', label: 'Attendance & Holidays', children: <Tabs defaultActiveKey="att" items={[
         { key: 'att', label: 'Daily attendance', children: <MentorAttendance mentors={mentors} /> },
         { key: 'hol', label: 'Holidays', children: <MentorHolidays mentors={mentors} /> },
