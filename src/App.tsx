@@ -2199,6 +2199,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   // Trainers can be deployed too (v37 request) — treat mentors + active trainers as one "people" set
   // for the deployment picker, the name/id maps, and the deployed/bench tables.
   const people = [...mentors, ...(trainers || [])]
+  const NON_MENTOR_LABEL: Record<string, string> = { trainer: 'Trainer', team_lead: 'Team Lead', manager: 'Manager', admin: 'Program Head' }
   const roleById: any = Object.fromEntries(people.map((m: any) => [m.id, m.role]))
   const nameById: any = Object.fromEntries(people.map((m: any) => [m.id, m.full_name]))
   const empById: any = Object.fromEntries(people.map((m: any) => [m.id, m.employee_id || '']))
@@ -2325,7 +2326,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   const daysOf = (d: any) => (d.from_date && d.to_date) ? dayjs(d.to_date).diff(dayjs(d.from_date), 'day') + 1 : '—'
   const lbl: any = { fontSize: 12, fontWeight: 600, color: '#69707d', margin: '10px 0 4px' }
   const addModal = add && <Modal open title={editId ? `Edit deployment · ${add.name || ''}` : add.name ? `Deploy ${add.name}` : 'New deployment'} okText={editId ? 'Save changes' : 'Request (needs Manager approval)'} onOk={submitAdd} onCancel={() => { setAdd(null); setEditId(null); setForm({}) }} destroyOnClose>
-    {!add.mentor_id && <><div style={lbl}>Mentor / Trainer</div><Select showSearch optionFilterProp="label" style={{ width: '100%' }} placeholder="Select a mentor or trainer" value={form.mentor_id} onChange={(v) => setForm((f: any) => ({ ...f, mentor_id: v, subject: subjectOf[v] || f.subject }))} options={people.map((m: any) => ({ value: m.id, label: m.full_name + (m.role === 'trainer' ? ' (Trainer)' : '') }))} /></>}
+    {!add.mentor_id && <><div style={lbl}>Mentor / Trainer</div><Select showSearch optionFilterProp="label" style={{ width: '100%' }} placeholder="Select a mentor or trainer" value={form.mentor_id} onChange={(v) => setForm((f: any) => ({ ...f, mentor_id: v, subject: subjectOf[v] || f.subject }))} options={people.map((m: any) => ({ value: m.id, label: m.full_name + (NON_MENTOR_LABEL[m.role] ? ` (${NON_MENTOR_LABEL[m.role]})` : '') }))} /></>}
     <div style={lbl}>Subject</div>
     <Input placeholder="Subject (e.g. Java, Python, Testing)" value={form.subject || ''} onChange={(e) => setForm((f: any) => ({ ...f, subject: e.target.value }))} />
     <div style={lbl}>Deployed to</div>
@@ -2388,7 +2389,9 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     // Back to bench = has COMPLETED any training (Branch / Online / College / Corporate / College grooming)
     // and is not currently on an active deployment → available to be mapped again or upskilled.
     const returned = new Set(myDeps.filter((d: any) => d.status === 'completed').map((d: any) => d.mentor_id))
-    const bench = people.filter((m: any) => !activeDeployed.has(m.id) && returned.has(m.id))
+    // Only mentors whose LIVE bucket is "back to bench". A mentor/trainer a Lead moved to Upskilling or
+    // Ready-to-deploy shows in the Mentor pipeline under that stage, NOT here.
+    const bench = people.filter((m: any) => mentorBucket(m, activeDeployed as Set<string>, returned as Set<string>) === 'bench')
     // A bench mentor's rating = mean of the deployment-feedback scores (student / external coordinator /
     // reporting lead). Each deployment carries a SUBJECT, so ratings are shown PER SUBJECT: one row per
     // subject × a 5→1 band per column. The same mentor can sit in different bands for different subjects.
@@ -2439,7 +2442,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     })()
     const benchShown = ql ? bench.filter((m: any) => String(m.full_name || '').toLowerCase().includes(ql)) : bench
     const cols = [
-      { title: 'Mentor', dataIndex: 'full_name', render: (_: any, m: any) => <span><b>{m.full_name}</b>{m.role === 'trainer' ? <Tag color="blue" style={{ marginLeft: 6 }}>Trainer</Tag> : null}</span> },
+      { title: 'Mentor', dataIndex: 'full_name', render: (_: any, m: any) => <span><b>{m.full_name}</b>{NON_MENTOR_LABEL[m.role] ? <Tag color="blue" style={{ marginLeft: 6 }}>{NON_MENTOR_LABEL[m.role]}</Tag> : null}</span> },
       { title: 'Subject', render: (_: any, m: any) => subjectOf[m.id] ? <Tag color="geekblue">{subjectOf[m.id]}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
       { title: 'Rating · all subjects', width: 150, render: (_: any, m: any) => { const a = fbAvgOf(m.id); return a != null ? <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'}>{a.toFixed(2)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> } },
       { title: 'Status', render: (_: any, m: any) => returned.has(m.id) ? <Tag color="blue">Returned from deployment</Tag> : <Tag>Available</Tag> },
@@ -2475,7 +2478,8 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
       {addModal}{feedbackModal}{ratingModal}{internalTaskModal}</>
   }
   const cols = [
-    { title: 'Mentor', dataIndex: 'mentor_id', render: (v: string) => <span><b>{nameById[v] || '—'}</b>{roleById[v] === 'trainer' ? <Tag color="blue" style={{ marginLeft: 6 }}>Trainer</Tag> : null}</span> },
+    { title: 'Mentor', dataIndex: 'mentor_id', render: (v: string) => <span><b>{nameById[v] || '—'}</b>{NON_MENTOR_LABEL[roleById[v]] ? <Tag color="blue" style={{ marginLeft: 6 }}>{NON_MENTOR_LABEL[roleById[v]]}</Tag> : null}</span> },
+    { title: 'Employee ID', dataIndex: 'mentor_id', width: 120, render: (v: string) => empById[v] ? <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{empById[v]}</span> : <span style={{ color: '#9aa1ad' }}>—</span> },
     { title: 'Subject', dataIndex: 'subject', render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
     { title: 'Deployed to', dataIndex: 'deployment_type', render: (v: string) => <Tag color="blue">{v}</Tag> },
     { title: 'From', dataIndex: 'from_date', render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
@@ -2555,7 +2559,11 @@ function mentorBucket(m: any, activeDeployed: Set<string>, returned: Set<string>
   if (activeDeployed.has(m.id)) return 'deployed'
   const st = m.mentor_status || 'in_training'
   if (MENTOR_EXITED.has(st)) return st
-  if (returned.has(m.id)) return 'bench'
+  // Returned from a deployment → "back to bench", UNLESS a Lead has explicitly set an active pipeline
+  // status (Upskilling / Ready to deploy). That deliberate choice takes precedence over the passive bench,
+  // so setting a training status on a bench mentor actually updates their Stage. (in_training is the
+  // default, so returned mentors that were never re-classified still show "back to bench".)
+  if (returned.has(m.id) && st !== 'upskilling' && st !== 'ready_to_deploy') return 'bench'
   return st
 }
 const BUCKET_META: Record<string, { label: string; color: string }> = {
@@ -2576,7 +2584,9 @@ function MentorPipeline({ mentors, mentorSubjects, deps, onChanged }: any) {
   const [q, setQ] = useState('')
   const [act, setAct] = useState<any>(null) // { mentor, status } while the reason modal is open
   const [reason, setReason] = useState('')
+  const [reasonEdit, setReasonEdit] = useState<any>(null) // { mentor } while the reason-details editor is open
   const [openBucket, setOpenBucket] = useState<string | null>(null) // KPI drill-down: names + subjects in a stage
+  const [stageFilter, setStageFilter] = useState<string | undefined>(undefined) // filter the pipeline table by stage
   const activeDeployed = new Set((deps || []).filter((d: any) => d.status === 'approved').map((d: any) => d.mentor_id))
   const returned = new Set((deps || []).filter((d: any) => d.status === 'completed').map((d: any) => d.mentor_id))
   const subjectsOf = (m: any): string[] => { const s = mentorSubjects[m.id]; return s && s.size ? [...s] : [] }
@@ -2597,6 +2607,16 @@ function MentorPipeline({ mentors, mentorSubjects, deps, onChanged }: any) {
     if (status === 'terminated' || status === 'dropout') { setReason(''); setAct({ mentor: m, status }) } // needs a documented reason
     else apply(m.id, status, null)
   }
+  // add / edit the reason DETAILS for a mentor's CURRENT stage (doesn't change the status)
+  async function saveReason(m: any, why: string) {
+    if (!canManage) { msg.warning('Only a Lead / Manager / Program Head can edit the reason.'); return }
+    const status = m.mentor_status || 'in_training'
+    if (MOCK_MENTOR_SUBTOPIC) { mockSetMentorStatus(m.id, status, why || null); msg.success('Reason saved (mock) ✓'); setReasonEdit(null); setReason(''); onChanged && onChanged(); return }
+    const u = await supabase.from('person').update({ mentor_status_reason: why || null, mentor_status_by: person?.id || null }).eq('id', m.id).select('id')
+    if (u.error) { msg.error(u.error.message); return }
+    if (!u.data || !u.data.length) { msg.error("Reason didn't save — no row updated. Sign in as a Program Head / Manager / Team Lead (RLS)."); return }
+    msg.success('Reason saved ✓'); setReasonEdit(null); setReason(''); onChanged && onChanged()
+  }
 
   // ---- counts per bucket ----
   const counts: Record<string, number> = { in_training: 0, ready_to_deploy: 0, upskilling: 0, deployed: 0, bench: 0, terminated: 0, dropout: 0 }
@@ -2608,7 +2628,9 @@ function MentorPipeline({ mentors, mentorSubjects, deps, onChanged }: any) {
   const subjectRows = Object.keys(bySubject).sort().map((s) => ({ subject: s, mentors: bySubject[s] }))
 
   const ql = q.trim().toLowerCase()
-  const shown = ql ? mentors.filter((m: any) => String(m.full_name || '').toLowerCase().includes(ql) || subjectsOf(m).some((s) => s.toLowerCase().includes(ql))) : mentors
+  const shown = mentors.filter((m: any) =>
+    (!ql || String(m.full_name || '').toLowerCase().includes(ql) || subjectsOf(m).some((s) => s.toLowerCase().includes(ql)))
+    && (!stageFilter || bucketOf(m) === stageFilter))
 
   const kpiCard = (key: string) => <Col xs={12} md={8} lg={6} key={key}>
     <Card hoverable onClick={() => setOpenBucket(key)} styles={{ body: { padding: 14 } }} title={undefined}><Statistic title={<span>{BUCKET_META[key].label} <span style={{ fontSize: 11, color: '#9aa1ad' }}>· tap for names</span></span>} value={counts[key] || 0} valueStyle={{ color: BUCKET_META[key].color, fontWeight: 800 }} /></Card>
@@ -2655,7 +2677,10 @@ function MentorPipeline({ mentors, mentorSubjects, deps, onChanged }: any) {
     { title: 'Mentor', dataIndex: 'full_name', render: (v: string) => <b>{v}</b> },
     { title: 'Subjects / skills', render: (_: any, m: any) => { const ss = subjectsOf(m); return ss.length ? <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>{ss.map((s) => <Tag key={s} color="geekblue" style={{ margin: 0 }}>{s}</Tag>)}</span> : <span style={{ color: '#9aa1ad' }}>—</span> } },
     { title: 'Stage', width: 150, render: (_: any, m: any) => { const b = bucketOf(m); return <Tag color={LIFECYCLE_COLOR[b] || (b === 'deployed' ? 'blue' : b === 'bench' ? 'cyan' : 'default')}>{BUCKET_META[b].label}</Tag> } },
-    { title: 'Reason', render: (_: any, m: any) => m.mentor_status_reason && MENTOR_EXITED.has(m.mentor_status) ? <span style={{ fontSize: 12, color: '#69707d' }}>{m.mentor_status_reason}</span> : <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: 'Reason / details', render: (_: any, m: any) => <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      {m.mentor_status_reason ? <span style={{ fontSize: 12, color: MENTOR_EXITED.has(m.mentor_status) ? '#dc2626' : '#69707d' }}>{m.mentor_status_reason}</span> : <span style={{ color: '#9aa1ad' }}>—</span>}
+      {canManage && <ATooltip title={m.mentor_status_reason ? 'Edit reason / details' : 'Add reason / details'}><Button type="link" size="small" style={{ padding: 0 }} icon={<EditOutlined />} onClick={() => { setReason(m.mentor_status_reason || ''); setReasonEdit({ mentor: m }) }} /></ATooltip>}
+    </span> },
     ...(canManage ? [{ title: 'Set training status', width: 210, render: (_: any, m: any) => { const b = bucketOf(m); if (b === 'deployed') return <span style={{ fontSize: 12, color: '#9aa1ad' }}>Manage on “Deployed” tab</span>; return <Select size="small" style={{ width: 200 }} placeholder="Change…" value={undefined} options={setOpts.filter((o) => o.value !== m.mentor_status)} onChange={(v) => changeStatus(m, v)} /> } }] : []),
   ]
 
@@ -2667,8 +2692,11 @@ function MentorPipeline({ mentors, mentorSubjects, deps, onChanged }: any) {
       {subjectTree.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No mentors mapped to subjects yet" />
         : <Tree treeData={subjectTree as any} showLine selectable={false} height={420} defaultExpandedKeys={subjectTree.length <= 3 ? subjectTree.map((n: any) => n.key) : []} />}
     </Card>
-    <Card title="Mentor pipeline — training status" size="small" extra={<Input allowClear size="small" prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor / subject…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 240 }} />}>
-      <Table size="middle" rowKey="id" columns={mgmtCols as any} dataSource={shown} pagination={{ pageSize: 12 }} scroll={{ x: 'max-content' }} locale={{ emptyText: <Empty description={ql ? `No mentors match “${q}”` : 'No mentors yet'} /> }} />
+    <Card title="Mentor pipeline — training status" size="small" extra={<span style={{ display: 'flex', gap: 8 }}>
+      <Select allowClear size="small" placeholder="All stages" style={{ width: 170 }} value={stageFilter} onChange={(v) => setStageFilter(v)} options={Object.keys(BUCKET_META).map((k) => ({ value: k, label: BUCKET_META[k].label }))} />
+      <Input allowClear size="small" prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor / subject…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: 240 }} />
+    </span>}>
+      <Table size="middle" rowKey="id" columns={mgmtCols as any} dataSource={shown} pagination={{ pageSize: 12 }} scroll={{ x: 'max-content' }} locale={{ emptyText: <Empty description={(ql || stageFilter) ? 'No mentors match the filter' : 'No mentors yet'} /> }} />
     </Card>
     {openBucket && (() => {
       const list = mentors.filter((m: any) => bucketOf(m) === openBucket).slice().sort((a: any, b: any) => String(a.full_name).localeCompare(String(b.full_name)))
@@ -2682,6 +2710,10 @@ function MentorPipeline({ mentors, mentorSubjects, deps, onChanged }: any) {
     {act && <Modal open title={<span style={{ color: '#dc2626' }}>{act.status === 'terminated' ? 'Terminate mentor (performance)' : 'Mark mentor as dropout'}</span>} okText={act.status === 'terminated' ? 'Terminate' : 'Mark dropout'} okButtonProps={{ danger: true, disabled: !reason.trim() }} onOk={() => apply(act.mentor.id, act.status, reason.trim())} onCancel={() => { setAct(null); setReason('') }} destroyOnClose>
       <div style={{ fontSize: 13, marginBottom: 10 }}>{act.status === 'terminated' ? 'Terminate' : 'Mark as dropout'} <b>{act.mentor.full_name}</b>. This is documented with your reason and kept in the mentor's status history (reversible — you can reinstate to training later).</div>
       <Input.TextArea rows={3} placeholder="Reason (documented)…" value={reason} onChange={(e) => setReason(e.target.value)} />
+    </Modal>}
+    {reasonEdit && <Modal open title={`Reason / details · ${reasonEdit.mentor.full_name}`} okText="Save reason" onOk={() => saveReason(reasonEdit.mentor, reason.trim())} onCancel={() => { setReasonEdit(null); setReason('') }} destroyOnClose>
+      <div style={{ fontSize: 13, marginBottom: 10 }}>Add or update the reason / details for <b>{reasonEdit.mentor.full_name}</b> — current stage <Tag color={tagColor(bucketOf(reasonEdit.mentor))} style={{ margin: 0 }}>{BUCKET_META[bucketOf(reasonEdit.mentor)].label}</Tag>. Saved to the mentor's record and shown in the Reason column.</div>
+      <Input.TextArea rows={3} placeholder="Reason / details…" value={reason} onChange={(e) => setReason(e.target.value)} />
     </Modal>}
   </div>
 }
@@ -2901,8 +2933,8 @@ function MentorGeneration() {
     // mock mode: overlay locally-saved training status so the sandbox is fully interactive (no prod writes)
     if (MOCK_MENTOR_SUBTOPIC) { const ms = mockAllMentorStatus(); visMentors.forEach((m: any) => { if (ms[m.id]) { m.mentor_status = ms[m.id].status; m.mentor_status_reason = ms[m.id].reason } }) }
     setMentors(visMentors)
-    // active trainers are deployable too (v37) — offered in the deployment picker and shown in the tabs
-    setDeployTrainers((p.data || []).filter((x: any) => x.role === 'trainer' && x.is_active))
+    // active trainers AND team leads are deployable too — offered in the deployment picker and shown in the tabs
+    setDeployTrainers((p.data || []).filter((x: any) => (x.role === 'trainer' || x.role === 'team_lead') && x.is_active))
     // deployment summary for pipeline counts (v34) — deployed / back-to-bench are derived from these
     if (MOCK_MENTOR_SUBTOPIC) setDeps(mockListDeployments())
     else { const dp = await supabase.from('mentor_deployment').select('mentor_id, status'); setDeps(dp.error ? [] : (dp.data || [])) }
