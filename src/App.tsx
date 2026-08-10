@@ -51,9 +51,9 @@ const FINAL_OUTPUT_OPTS = ['Pending', 'In Progress', 'Reshoot', 'Editing complet
 const FO_DONE = ['Editing completed', 'Output completed', 'Completed']
 const SLOTS_PER_DAY = 6
 const qualityColor: any = { Excellent: '#16a34a', Good: '#2563eb', Average: '#c2790a', Poor: '#dc2626' }
-const ROLES = ['admin', 'trainer', 'editor', 'reviewer', 'manager', 'team_lead', 'mentor']
-const roleLabel = (r: string) => r === 'admin' ? 'Program Head' : r === 'team_lead' ? 'Team Lead' : r.charAt(0).toUpperCase() + r.slice(1)
-const roleColor: any = { admin: 'purple', trainer: 'blue', editor: 'magenta', reviewer: 'gold', manager: 'green', team_lead: 'cyan', mentor: 'volcano' }
+const ROLES = ['admin', 'trainer', 'editor', 'reviewer', 'manager', 'team_lead', 'mentor', 'viewer']
+const roleLabel = (r: string) => r === 'admin' ? 'Program Head' : r === 'team_lead' ? 'Team Lead' : r === 'viewer' ? 'Viewer (read-only)' : r.charAt(0).toUpperCase() + r.slice(1)
+const roleColor: any = { admin: 'purple', trainer: 'blue', editor: 'magenta', reviewer: 'gold', manager: 'green', team_lead: 'cyan', mentor: 'volcano', viewer: 'default' }
 // the four gated prep steps a mentor completes per topic before they're deploy-ready
 const MENTOR_STEPS = [
   { key: 'watched', label: 'Watch video', icon: '▶' },
@@ -193,9 +193,11 @@ function AuthProvider({ children }: { children: any }) {
   const can = (key: string) => person?.role === 'admin' || !access || access[key] !== false
   // admin + team leads can always (re)assign; managers/trainers only if granted the per-person flag
   const canAssign = person?.role === 'admin' || person?.role === 'team_lead' || !!person?.can_assign
-  // admin always sees all; everyone else (managers + team leads included) honors their per-person "Sees all content" toggle.
-  const seesAll = person?.role === 'admin' || !!person?.full_visibility
-  return <AuthCtx.Provider value={{ session, person, loading, can, canAssign, seesAll, signOut: () => supabase.auth.signOut() }}>{children}</AuthCtx.Provider>
+  // admin always sees all; a read-only 'viewer' sees all too; everyone else honors their "Sees all content" toggle.
+  const seesAll = person?.role === 'admin' || person?.role === 'viewer' || !!person?.full_visibility
+  // read-only account: sees everything, writes nothing. The DB also rejects viewer writes (no write RLS).
+  const readOnly = person?.role === 'viewer'
+  return <AuthCtx.Provider value={{ session, person, loading, can, canAssign: canAssign && !readOnly, seesAll, readOnly, signOut: () => supabase.auth.signOut() }}>{children}</AuthCtx.Provider>
 }
 
 /* ===================== login ===================== */
@@ -902,6 +904,16 @@ function ContentExplorer() {
     else { setTopicF(null) }
     load()
   }
+  // Program-Head only: delete a single sub-topic. Deleting the subtopic node cascades to its content_item,
+  // stages, recordings, edits & reviews (studio bookings are kept but unlinked) — same cascade the branch
+  // delete relies on. Falls back to the content_item if the row has no subtopic id.
+  async function deleteSubtopic(r: any) {
+    const target = r.subtopicId ? { table: 'subtopic', id: r.subtopicId } : { table: 'content_item', id: r.id }
+    const { data, error } = await supabase.from(target.table).delete().eq('id', target.id).select('id')
+    if (error) { msg.error(error.message); return }
+    if (!data || !data.length) { msg.error(`Couldn't delete — only ${PH_EMAIL} may delete.`); return }
+    msg.success(`Sub-topic “${r.name}” deleted.`); load()
+  }
   if (!rows || (scoped && visIds === null)) return <div style={{ display: 'grid', placeItems: 'center', height: 300 }}><Spin /></div>
   // Scoped users (team leads / non "sees all") browse ONLY what's assigned to them, so the
   // Program/Subject/Chapter/Topic pickers must come from THEIR visible items — not the whole
@@ -927,9 +939,10 @@ function ContentExplorer() {
     { title: 'Current stage', dataIndex: 'stageName', width: 200, render: (v: string, r: any) => <StageBadge name={v} seq={r.stageSeq} /> },
     { title: 'Assigned to', width: 180, render: (_: any, r: any) => r.owner ? <span><Avatar size={20} style={{ background: '#a855f7', marginRight: 6, fontSize: 11 }}>{(r.owner || '?')[0]}</Avatar>{r.owner}{r.ownerLevel && <Tag style={{ marginInlineStart: 4 }}>{r.ownerLevel}</Tag>}</span> : <Tag color="default">Unassigned</Tag> },
     { title: 'Completion', dataIndex: 'completion', width: 170, render: (v: number) => <Progress percent={v} size="small" strokeColor={PRIMARY} /> },
-    { title: '', width: 130, render: (_: any, r: any) => <span onClick={(e: any) => e.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
+    { title: '', width: 160, render: (_: any, r: any) => <span onClick={(e: any) => e.stopPropagation()} style={{ whiteSpace: 'nowrap' }}>
       <Button size="small" type="link" onClick={() => setEditing(r)}>Open</Button>
       {isAdmin && <Button size="small" type="text" icon={<EditOutlined />} title="Modify (rename / move)" onClick={() => setModify(r)} />}
+      {canDeleteProg && <Popconfirm title="Delete this sub-topic?" description={<span style={{ maxWidth: 280, display: 'inline-block' }}>Permanently removes <b>{r.name}</b> and its recording / edit / review history. Studio bookings are kept but unlinked. Cannot be undone.</span>} okText="Delete" okButtonProps={{ danger: true }} onConfirm={() => deleteSubtopic(r)}><Button size="small" type="text" danger icon={<DeleteOutlined />} title="Delete sub-topic" /></Popconfirm>}
     </span> },
   ]
   return (
@@ -1935,7 +1948,7 @@ function MentorPrepDrawer({ row, canEdit, canLead, onClose, onSaved }: any) {
    A visual, read-only analytics view: how the individual and (for leads) their team are
    performing. Charts only, no actions. Top-level nav item above Command Center, for the
    non-management roles (trainer / editor / reviewer / team-lead / mentor). */
-const DASH_ROLES = ['trainer', 'editor', 'reviewer', 'team_lead', 'mentor']
+const DASH_ROLES = ['trainer', 'editor', 'reviewer', 'team_lead', 'mentor', 'viewer']
 const STATUS_COLORS = ['#16a34a', '#2563eb', '#cbd5e1']
 function DashStat({ label, value, color }: any) {
   return <div style={{ flex: '1 1 140px', background: '#fff', border: '1px solid #eef0f3', borderRadius: 14, padding: '14px 18px' }}>
