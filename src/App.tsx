@@ -1473,6 +1473,7 @@ function People() {
   }
   if (!rows) return <div style={{ display: 'grid', placeItems: 'center', height: 300 }}><Spin /></div>
   const cols: any[] = [
+    { title: 'Sl No', width: 70, render: (_: any, __: any, i: number) => <span style={{ color: '#9aa1ad' }}>{i + 1}</span> },
     { title: 'Name', dataIndex: 'full_name', render: (v: string) => <span><Avatar size={24} style={{ background: '#a855f7', marginRight: 8 }}>{(v || '?')[0]}</Avatar><b>{v}</b></span> },
     { title: 'Email', dataIndex: 'email', render: (v: string) => <span style={{ color: '#69707d' }}>{v}</span> },
     { title: 'Role', dataIndex: 'role', render: (v: string) => <Tag color={roleColor[v]}>{roleLabel(v)}</Tag> },
@@ -1488,8 +1489,29 @@ function People() {
   </span> })
   const ql = q.trim().toLowerCase()
   const filtered = ql ? rows.filter((r: any) => [r.full_name, r.email, roleLabel(r.role), r.role, r.trainer_type].some((x: any) => String(x || '').toLowerCase().includes(ql))) : rows
+  // role-wise active / inactive counts for the summary widget
+  const byRole: Record<string, { active: number; inactive: number }> = {}
+  rows.forEach((r: any) => { const k = r.role || 'other'; const e = byRole[k] = byRole[k] || { active: 0, inactive: 0 }; r.is_active ? e.active++ : e.inactive++ })
+  const roleOrder = [...ROLES, ...Object.keys(byRole).filter((k) => !ROLES.includes(k))].filter((k) => byRole[k])
+  const totalActive = rows.filter((r: any) => r.is_active).length
+  const totalInactive = rows.length - totalActive
+  const numBlock = (n: number, color: string, lbl: string) => <span style={{ fontSize: 20, fontWeight: 800, color, lineHeight: 1.1 }}>{n}<span style={{ fontSize: 11, color: '#9aa1ad', fontWeight: 400 }}> {lbl}</span></span>
   return <div>
-    <PageHead title="People" sub={`${rows.length} team members`} extra={canManage ? <Button type="primary" icon={<PlusOutlined />} onClick={() => setEdit({})}>Add teammate</Button> : undefined} />
+    <PageHead title="People" sub={`${rows.length} team members · ${totalActive} active · ${totalInactive} inactive`} extra={canManage ? <Button type="primary" icon={<PlusOutlined />} onClick={() => setEdit({})}>Add teammate</Button> : undefined} />
+    <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+      <Col xs={12} md={8} lg={6}>
+        <Card styles={{ body: { padding: 14 } }} style={{ background: '#f7f8fb', borderColor: '#eef0f3' }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#69707d', marginBottom: 6 }}>All members</div>
+          <div style={{ display: 'flex', gap: 18 }}>{numBlock(totalActive, '#16a34a', 'active')}{totalInactive > 0 && numBlock(totalInactive, '#9aa1ad', 'inactive')}</div>
+        </Card>
+      </Col>
+      {roleOrder.map((role) => <Col xs={12} md={8} lg={6} key={role}>
+        <Card styles={{ body: { padding: 14 } }}>
+          <div style={{ marginBottom: 6 }}><Tag color={roleColor[role]} style={{ margin: 0 }}>{roleLabel(role)}</Tag></div>
+          <div style={{ display: 'flex', gap: 18 }}>{numBlock(byRole[role].active, '#16a34a', 'active')}{byRole[role].inactive > 0 && numBlock(byRole[role].inactive, '#9aa1ad', 'inactive')}</div>
+        </Card>
+      </Col>)}
+    </Row>
     <Card>
       <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search by name, email or role…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 320, marginBottom: 14 }} />
       <Table columns={cols as any} dataSource={filtered.map((r: any) => ({ ...r, key: r.id }))} pagination={false} locale={{ emptyText: <Empty description={ql ? `No people match “${q}”` : 'No people yet'} /> }} />
@@ -4624,8 +4646,9 @@ function MentorAnalytics() {
   const [histSubj, setHistSubj] = useState<string | null>(null)  // Rating history → filter by subject
   const [histBand, setHistBand] = useState<string | null>(null)  // Rating history → filter by rating band
   async function load() {
-    const p = await supabase.from('person').select('id, full_name, role, is_active, lead_id, program_id')
-    const people = p.data || []
+    let p: any = await supabase.from('person').select('id, full_name, role, is_active, lead_id, program_id, mentor_status')
+    if (p.error) p = await supabase.from('person').select('id, full_name, role, is_active, lead_id, program_id')
+    const people: any[] = p.data || []
     const nameById: any = {}; people.forEach((x: any) => nameById[x.id] = x.full_name)
     const allMentors = people.filter((x: any) => x.role === 'mentor' && x.is_active)
     const coPrograms = await coAssignedPrograms(person.id) // co-assigned programs (v29) widen a lead's mentor view
@@ -4649,7 +4672,13 @@ function MentorAnalytics() {
     // also resolve SUB-TOPIC ids → subject (ratings can be scoped at the sub-topic level)
     const stp = await selectAll('subtopic', 'id, name, topic:topic_id(name, chapter:chapter_id(subject:subject_id(name)))')
     stp.forEach((st: any) => topicMap[st.id] = { topic: st.topic?.name || st.name, subject: st.topic?.chapter?.subject?.name || '—' })
-    setD({ visMentors, nameById, prep, ratings, topicMap })
+    // deployed mentors (approved deployment) — their rating is hidden in analytics, shown as "Deployed"
+    const dp = MOCK_MENTOR_SUBTOPIC ? mockListDeployments() : ((await supabase.from('mentor_deployment').select('mentor_id, status')).data || [])
+    const deployed = new Set((dp || []).filter((x: any) => x.status === 'approved').map((x: any) => x.mentor_id))
+    // mentors with an OPEN internal task (v37) — shown as "Internal Task" instead of a rating
+    const it = MOCK_MENTOR_SUBTOPIC ? [] : ((await supabase.from('mentor_internal_task').select('mentor_id, status')).data || [])
+    const internalTask = new Set((it || []).filter((x: any) => x.status === 'open').map((x: any) => x.mentor_id))
+    setD({ visMentors, nameById, prep, ratings, topicMap, deployed, internalTask })
   }
   useEffect(() => { if (person?.id) load() }, [person?.id])
   if (!d) return <div style={{ display: 'grid', placeItems: 'center', height: 300 }}><Spin /></div>
@@ -4701,7 +4730,7 @@ function MentorAnalytics() {
   // rating history — every rating from day one to date; "avg" = mean of per-category averages (overallOf)
   const histRows = d.visMentors.map((m: any) => {
     const rs = d.ratings.filter((r: any) => r.mentor_id === m.id && r.score != null).slice().sort((a: any, b: any) => String(a.rated_on).localeCompare(String(b.rated_on)))
-    return { key: m.id, name: m.full_name, subject: mentorSubjectOf(m.id), count: rs.length, first: rs[0]?.rated_on || null, last: rs[rs.length - 1]?.rated_on || null, avg: overallOf(m.id), entries: rs }
+    return { key: m.id, name: m.full_name, subject: mentorSubjectOf(m.id), count: rs.length, first: rs[0]?.rated_on || null, last: rs[rs.length - 1]?.rated_on || null, avg: overallOf(m.id), entries: rs, deployed: d.deployed?.has(m.id), internalTask: d.internalTask?.has(m.id), upskilling: m.mentor_status === 'upskilling' }
   }).sort((a: any, b: any) => (b.avg ?? -1) - (a.avg ?? -1))
   // subject options come from the mentors actually in view
   const histSubjOpts = [...new Set(histRows.map((r: any) => r.subject).filter(Boolean))].sort() as string[]
@@ -4727,12 +4756,18 @@ function MentorAnalytics() {
     && (!histSubj || r.subject === histSubj)
     && inBand(r.avg))
   const histCols = [
+    { title: 'Sl No', width: 70, render: (_: any, r: any) => <span style={{ color: '#9aa1ad' }}>{r._sl}</span> },
     { title: 'Mentor', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
     { title: 'Subject', dataIndex: 'subject', width: 150, render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
     { title: 'Ratings', dataIndex: 'count', width: 80 },
     { title: 'First rated', dataIndex: 'first', width: 120, render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
     { title: 'Last rated', dataIndex: 'last', width: 120, render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
-    { title: 'Average rating', dataIndex: 'avg', width: 130, render: (v: number) => v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v.toFixed(2)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: 'Average rating', dataIndex: 'avg', width: 130, render: (v: number, r: any) => {
+      const ratingTag = v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v.toFixed(2)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span>
+      // when the "All ratings" band filter is active, always show the (updated) numeric rating, not the status tag
+      if (histBand) return ratingTag
+      return r.deployed ? <Tag color="blue">Deployed</Tag> : r.internalTask ? <Tag color="gold">Internal Task</Tag> : r.upskilling ? <Tag color="purple">Upskilling</Tag> : ratingTag
+    } },
   ]
   const nMentors = rows.length
   const withR = rows.filter((r: any) => r.overall != null)
@@ -4768,7 +4803,7 @@ function MentorAnalytics() {
           <Button size="small" type="text" onClick={() => { setHistQ(''); setHistSubj(null); setHistBand(null) }}>Clear</Button>
         </>}
       </div>
-      <Table size="small" rowKey="key" columns={histCols as any} dataSource={histShown} pagination={{ pageSize: 12 }}
+      <Table size="small" rowKey="key" columns={histCols as any} dataSource={histShown.map((r: any, i: number) => ({ ...r, _sl: i + 1 }))} pagination={{ pageSize: 12 }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ratings yet — rate mentors from the Mentor Preparation Board." /> }}
         expandable={{
           rowExpandable: (rec: any) => rec.count > 0,
