@@ -914,6 +914,16 @@ function ContentExplorer() {
     if (!data || !data.length) { msg.error(`Couldn't delete — only ${PH_EMAIL} may delete.`); return }
     msg.success(`Sub-topic “${r.name}” deleted.`); load()
   }
+  // Program-Head only: export the whole curriculum (Program → Subject → Chapter → Topic → Sub-topic) to Excel.
+  async function downloadCurriculum() {
+    const cur = await fetchCurriculumPaths()
+    if (!cur.length) { msg.info('No curriculum to export yet.'); return }
+    const out = cur.map((r: any) => ({ Program: r.program, Subject: r.subject, Chapter: r.chapter, Topic: r.topic, 'Sub-topic': r.subtopic }))
+    const ws = XLSX.utils.json_to_sheet(out, { header: CURR_COLS }); ws['!cols'] = CURR_COLS.map(() => ({ wch: 26 }))
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Curriculum')
+    XLSX.writeFile(wb, 'Trackademy_curriculum.xlsx')
+    msg.success(`Curriculum downloaded — ${out.length} sub-topics ✓`)
+  }
   if (!rows || (scoped && visIds === null)) return <div style={{ display: 'grid', placeItems: 'center', height: 300 }}><Spin /></div>
   // Scoped users (team leads / non "sees all") browse ONLY what's assigned to them, so the
   // Program/Subject/Chapter/Topic pickers must come from THEIR visible items — not the whole
@@ -966,6 +976,7 @@ function ContentExplorer() {
           {statusF && <Button size="small" onClick={() => setStatusF(null)}>Clear status</Button>}
           {canDeleteProg && <Button icon={<PlusOutlined />} onClick={() => setAddSubj(true)}>Add subject</Button>}
           {canDeleteProg && <Button icon={<PlusOutlined />} onClick={() => setAddSub(true)}>Add sub-topic</Button>}
+          {canDeleteProg && <Button icon={<DownloadOutlined />} onClick={downloadCurriculum}>Download curriculum</Button>}
           {canDeleteProg && dt && <Button danger icon={<DeleteOutlined />} onClick={() => { setDelText(''); setDelOpen(true) }}>Delete {dt.lvl}</Button>}
           <div style={{ marginLeft: 'auto', alignSelf: 'center', color: '#9aa1ad', fontSize: 12 }}>{tableRows.length} shown</div>
         </div>
@@ -2423,7 +2434,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   if (mode === 'bench') {
     // Back to bench = has COMPLETED any training (Branch / Online / College / Corporate / College grooming)
     // and is not currently on an active deployment → available to be mapped again or upskilled.
-    const returned = new Set(myDeps.filter((d: any) => d.status === 'completed').map((d: any) => d.mentor_id))
+    const returned = benchReturnedSet(people, myDeps)
     // Only mentors whose LIVE bucket is "back to bench". A mentor/trainer a Lead moved to Upskilling or
     // Ready-to-deploy shows in the Mentor pipeline under that stage, NOT here.
     const bench = people.filter((m: any) => mentorBucket(m, activeDeployed as Set<string>, returned as Set<string>) === 'bench')
@@ -2590,15 +2601,22 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
 
 // v34: derive a mentor's live "bucket". Deployed / bench come from mentor_deployment;
 // the rest (in_training / ready_to_deploy / upskilling / terminated / dropout) from person.mentor_status.
+// A mentor/trainer is "on the bench" only when they've returned from a deployment AND a Lead has NOT
+// re-classified their training status SINCE that return (mentor_status_at is not after the deployment's
+// completion). So setting ANY status after a return — under training / upskilling / ready to deploy —
+// takes them off the bench into that stage; a returned mentor never touched since still shows "back to bench".
+function benchReturnedSet(people: any[], deps: any[]): Set<string> {
+  const comp: Record<string, number> = {} // person_id -> latest completed-deployment time
+  ;(deps || []).forEach((d: any) => { if (d.status !== 'completed') return; const t = new Date(d.updated_at || d.to_date || 0).getTime(); if (!(d.mentor_id in comp) || t > comp[d.mentor_id]) comp[d.mentor_id] = t })
+  const out = new Set<string>()
+  ;(people || []).forEach((m: any) => { if (!(m.id in comp)) return; const sa = m.mentor_status_at ? new Date(m.mentor_status_at).getTime() : 0; if (sa <= comp[m.id]) out.add(m.id) })
+  return out
+}
 function mentorBucket(m: any, activeDeployed: Set<string>, returned: Set<string>): string {
   if (activeDeployed.has(m.id)) return 'deployed'
   const st = m.mentor_status || 'in_training'
   if (MENTOR_EXITED.has(st)) return st
-  // Returned from a deployment → "back to bench", UNLESS a Lead has explicitly set an active pipeline
-  // status (Upskilling / Ready to deploy). That deliberate choice takes precedence over the passive bench,
-  // so setting a training status on a bench mentor actually updates their Stage. (in_training is the
-  // default, so returned mentors that were never re-classified still show "back to bench".)
-  if (returned.has(m.id) && st !== 'upskilling' && st !== 'ready_to_deploy') return 'bench'
+  if (returned.has(m.id)) return 'bench' // `returned` is already refined to exclude re-classified mentors
   return st
 }
 const BUCKET_META: Record<string, { label: string; color: string }> = {
@@ -2623,7 +2641,7 @@ function MentorPipeline({ mentors, mentorSubjects, deps, onChanged }: any) {
   const [openBucket, setOpenBucket] = useState<string | null>(null) // KPI drill-down: names + subjects in a stage
   const [stageFilter, setStageFilter] = useState<string | undefined>(undefined) // filter the pipeline table by stage
   const activeDeployed = new Set((deps || []).filter((d: any) => d.status === 'approved').map((d: any) => d.mentor_id))
-  const returned = new Set((deps || []).filter((d: any) => d.status === 'completed').map((d: any) => d.mentor_id))
+  const returned = benchReturnedSet(mentors, deps || [])
   const subjectsOf = (m: any): string[] => { const s = mentorSubjects[m.id]; return s && s.size ? [...s] : [] }
   const bucketOf = (m: any) => mentorBucket(m, activeDeployed as Set<string>, returned as Set<string>)
 
@@ -2716,7 +2734,7 @@ function MentorPipeline({ mentors, mentorSubjects, deps, onChanged }: any) {
       {m.mentor_status_reason ? <span style={{ fontSize: 12, color: MENTOR_EXITED.has(m.mentor_status) ? '#dc2626' : '#69707d' }}>{m.mentor_status_reason}</span> : <span style={{ color: '#9aa1ad' }}>—</span>}
       {canManage && <ATooltip title={m.mentor_status_reason ? 'Edit reason / details' : 'Add reason / details'}><Button type="link" size="small" style={{ padding: 0 }} icon={<EditOutlined />} onClick={() => { setReason(m.mentor_status_reason || ''); setReasonEdit({ mentor: m }) }} /></ATooltip>}
     </span> },
-    ...(canManage ? [{ title: 'Set training status', width: 210, render: (_: any, m: any) => { const b = bucketOf(m); if (b === 'deployed') return <span style={{ fontSize: 12, color: '#9aa1ad' }}>Manage on “Deployed” tab</span>; return <Select size="small" style={{ width: 200 }} placeholder="Change…" value={undefined} options={setOpts.filter((o) => o.value !== m.mentor_status)} onChange={(v) => changeStatus(m, v)} /> } }] : []),
+    ...(canManage ? [{ title: 'Set training status', width: 210, render: (_: any, m: any) => { const b = bucketOf(m); if (b === 'deployed') return <span style={{ fontSize: 12, color: '#9aa1ad' }}>Manage on “Deployed” tab</span>; return <Select size="small" style={{ width: 200 }} placeholder="Change…" value={undefined} options={setOpts.filter((o) => o.value !== b)} onChange={(v) => changeStatus(m, v)} /> } }] : []),
   ]
 
   return <div>
@@ -2972,7 +2990,7 @@ function MentorGeneration() {
     setDeployTrainers((p.data || []).filter((x: any) => (x.role === 'trainer' || x.role === 'team_lead') && x.is_active))
     // deployment summary for pipeline counts (v34) — deployed / back-to-bench are derived from these
     if (MOCK_MENTOR_SUBTOPIC) setDeps(mockListDeployments())
-    else { const dp = await supabase.from('mentor_deployment').select('mentor_id, status'); setDeps(dp.error ? [] : (dp.data || [])) }
+    else { const dp = await supabase.from('mentor_deployment').select('mentor_id, status, updated_at, to_date'); setDeps(dp.error ? [] : (dp.data || [])) }
     const nm: any = {}; (p.data || []).forEach((x: any) => nm[x.id] = x.full_name); setNameById(nm)
     // a Lead/Manager sees ONLY the programs they OWN (Navya = Python only), regardless of mentor tagging
     let lp: Set<string> | null = null
@@ -3182,7 +3200,7 @@ function MentorGeneration() {
   // live lifecycle buckets (v34). Deployed / Back-to-bench derive from mentor_deployment; the rest from mentor_status.
   // "Back to bench" = has COMPLETED any training (Branch / Online / College / Corporate / College grooming).
   const activeDeployedSet = new Set(deps.filter((d: any) => d.status === 'approved').map((d: any) => d.mentor_id))
-  const returnedSet = new Set(deps.filter((d: any) => d.status === 'completed').map((d: any) => d.mentor_id))
+  const returnedSet = benchReturnedSet(mentors, deps)
   const bcount: Record<string, number> = {}
   mentors.forEach((m: any) => { const b = mentorBucket(m, activeDeployedSet as Set<string>, returnedSet as Set<string>); bcount[b] = (bcount[b] || 0) + 1 })
   const trainingCount = (bcount.in_training || 0) + (bcount.upskilling || 0)
@@ -3373,7 +3391,10 @@ function MentorGeneration() {
     const b = mentorBucket(m, activeDeployedSet as Set<string>, returnedSet as Set<string>)
     if (b !== 'in_training' && b !== 'upskilling') return
     const ss = mentorSubjects[m.id]
-    const keys = ss && ss.size ? [...ss] : ['— no subject —']
+    let keys = ss && ss.size ? [...ss] : ['— no subject —']
+    // Playwright is a Web-Technology combination: a mentor doing Playwright counts under the "Playwright"
+    // widget (Web Tech + Playwright), NOT the plain "Web Technology" widget — so drop Web Technology for them.
+    if (keys.some((k) => k.toLowerCase() === 'playwright')) keys = keys.filter((k) => k.toLowerCase() !== 'web technology')
     keys.forEach((s) => { (subjTrainingMentors[s] = subjTrainingMentors[s] || []).push(m) })
   })
   const subjTrainingRows = Object.keys(subjTrainingMentors).sort((a, b) => subjTrainingMentors[b].length - subjTrainingMentors[a].length)
@@ -4255,7 +4276,9 @@ function AddSubtopicModal({ open, onClose, onSaved, defaultProgram, defaultSubje
 
 /* ===================== bulk curriculum via Excel ===================== */
 async function fetchCurriculumPaths() {
-  const { data } = await supabase.from('content_item').select('id, subtopic:subtopic_id(name, topic:topic_id(name, chapter:chapter_id(name, subject:subject_id(name, main_subject:main_subject_id(name)))))')
+  // selectAll paginates past PostgREST's 1000-row cap — a plain select truncated the export well short
+  // of the full catalogue (e.g. 1000 of 5092 sub-topics).
+  const data = await selectAll('content_item', 'id, subtopic:subtopic_id(name, topic:topic_id(name, chapter:chapter_id(name, subject:subject_id(name, main_subject:main_subject_id(name)))))')
   return (data || []).map((ci: any) => ({
     program: ci.subtopic?.topic?.chapter?.subject?.main_subject?.name || '',
     subject: ci.subtopic?.topic?.chapter?.subject?.name || '',
