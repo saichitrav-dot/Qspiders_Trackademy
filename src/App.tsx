@@ -2231,6 +2231,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   const [editId, setEditId] = useState<string | null>(null) // deployment being edited (null = new request)
   const [form, setForm] = useState<any>({})
   const [q, setQ] = useState('')
+  const [subjF, setSubjF] = useState<string[]>([]) // subject MULTI-filter (deployed + back-to-bench tabs)
   const [fb, setFb] = useState<any>(null)     // { mentor_id, name } when the feedback-rating modal is open
   const [fbDep, setFbDep] = useState<any>(null) // the deployment (return) the feedback is for
   const [fbScores, setFbScores] = useState<any>({})
@@ -2250,6 +2251,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   const nameById: any = Object.fromEntries(people.map((m: any) => [m.id, m.full_name]))
   const empById: any = Object.fromEntries(people.map((m: any) => [m.id, m.employee_id || '']))
   const mentorIds = new Set(people.map((m: any) => m.id))
+  const subjKey = (s: any) => String(s || '').trim().toLowerCase() // normalise free-text subjects (trim + case) so variants aren't double-counted
   // deployment_id -> ALL its batches (same trainer can run several batches on the same date)
   const batchesByDep: any = batches.reduce((a: any, b: any) => { (a[b.deployment_id] = a[b.deployment_id] || []).push(b); return a }, {})
   const itByMentor: any = internalTasks.reduce((a: any, t: any) => { (a[t.mentor_id] = a[t.mentor_id] || []).push(t); return a }, {})
@@ -2486,7 +2488,8 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
           </div>)}
       </Modal>
     })()
-    const benchShown = ql ? bench.filter((m: any) => String(m.full_name || '').toLowerCase().includes(ql)) : bench
+    const benchShown = bench.filter((m: any) => (!ql || String(m.full_name || '').toLowerCase().includes(ql)) && (!subjF.length || subjF.some((f: string) => subjKey(f) === subjKey(subjectOf[m.id]))))
+    const benchSubjOpts = (() => { const m: Record<string, string> = {}; bench.forEach((mm: any) => { const raw = String(subjectOf[mm.id] || '').trim(); if (raw && !m[subjKey(raw)]) m[subjKey(raw)] = raw }); return Object.values(m).sort() })()
     const cols = [
       { title: 'Mentor', dataIndex: 'full_name', render: (_: any, m: any) => <span><b>{m.full_name}</b>{NON_MENTOR_LABEL[m.role] ? <Tag color="blue" style={{ marginLeft: 6 }}>{NON_MENTOR_LABEL[m.role]}</Tag> : null}</span> },
       { title: 'Subject', render: (_: any, m: any) => subjectOf[m.id] ? <Tag color="geekblue">{subjectOf[m.id]}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
@@ -2519,7 +2522,10 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     ]
     return <><div style={{ fontSize: 12, color: '#69707d', marginBottom: 10 }}>Mentors who have <b>completed a training</b> (Branch / Online / College / Corporate / College grooming) and are not on an active deployment — available to be mapped to another requirement or upskilled. Rating = average of their deployment feedback across all returns.</div>
       {ratingCards}
-      <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 280, marginBottom: 12 }} />
+      <span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 280 }} />
+        <Select mode="multiple" allowClear showSearch maxTagCount="responsive" placeholder="Filter by subject(s)…" style={{ minWidth: 240 }} value={subjF} onChange={setSubjF} options={benchSubjOpts.map((s) => ({ value: s, label: s }))} />
+      </span>
       <Table size="middle" rowKey="id" columns={cols as any} dataSource={benchShown} pagination={{ pageSize: 12 }} scroll={{ x: 'max-content' }} locale={{ emptyText: <Empty description={ql ? `No mentors match “${q}”` : 'No mentors back on the bench yet — nobody has completed a training and returned.'} /> }} />
       {addModal}{feedbackModal}{ratingModal}{internalTaskModal}</>
   }
@@ -2540,7 +2546,8 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
       {d.status === 'approved' && <Button size="small" onClick={() => endDeployment(d)}>End</Button>}
     </span> },
   ]
-  const depShown = ql ? myDeps.filter((d: any) => [nameById[d.mentor_id], d.deployment_type, d.details, d.status].some((x: any) => String(x || '').toLowerCase().includes(ql))) : myDeps
+  const depShown = myDeps.filter((d: any) => (!ql || [nameById[d.mentor_id], d.deployment_type, d.details, d.status].some((x: any) => String(x || '').toLowerCase().includes(ql))) && (!subjF.length || subjF.some((f: string) => subjKey(f) === subjKey(d.subject))))
+  const depSubjOpts = (() => { const m: Record<string, string> = {}; myDeps.forEach((d: any) => { const raw = String(d.subject || '').trim(); if (raw && !m[subjKey(raw)]) m[subjKey(raw)] = raw }); return Object.values(m).sort() })()
   // how many DISTINCT mentors are currently deployed (approved) under each deployment type.
   // A mentor with two approved deployments of the same type counts once; across types they count in each.
   const byType: Record<string, Set<string>> = {}
@@ -2566,7 +2573,10 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
       <div style={{ fontSize: 12, color: '#69707d' }}>Counts show mentors <b>currently deployed</b> (Manager-approved) per type. Deployments need a Manager's prior approval before they go active.</div>
       <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setForm({}); setAdd({ mentor_id: null }) }}>New deployment</Button>
     </div>
-    <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search by mentor, type, details or status…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 340, marginBottom: 12 }} />
+    <span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+      <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search by mentor, type, details or status…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 340 }} />
+      <Select mode="multiple" allowClear showSearch maxTagCount="responsive" placeholder="Filter by subject(s)…" style={{ minWidth: 240 }} value={subjF} onChange={setSubjF} options={depSubjOpts.map((s) => ({ value: s, label: s }))} />
+    </span>
     <Table size="middle" rowKey="id" columns={cols as any} dataSource={depShown} pagination={{ pageSize: 12 }}
       expandable={{
         rowExpandable: (d: any) => d.deployment_type === 'Online training',
@@ -2630,7 +2640,7 @@ const BUCKET_META: Record<string, { label: string; color: string }> = {
 }
 
 // Pipeline & subject-wise metrics + training-lifecycle controls (Ready to deploy / Upskill / Terminate / Dropout / Reinstate).
-function MentorPipeline({ mentors, mentorSubjects, deps, onChanged }: any) {
+function MentorPipeline({ mentors, mentorSubjects, deps, subjTrainerCount = {}, onChanged }: any) {
   const { person } = useAuth()
   const { message: msg } = AntApp.useApp()
   const canManage = person?.role === 'admin' || OWNER_ROLES.includes(person?.role)
@@ -2692,17 +2702,19 @@ function MentorPipeline({ mentors, mentorSubjects, deps, onChanged }: any) {
   const tagColor = (b: string) => LIFECYCLE_COLOR[b] || (b === 'deployed' ? 'blue' : b === 'bench' ? 'cyan' : 'default')
   // Subject → mentors tree: each subject expands to the mentors mapped to it with their current stage
   const subjectTree = subjectRows.map((r: any) => {
-    const under = r.mentors.filter((m: any) => ['in_training', 'upskilling'].includes(bucketOf(m))).length
-    const dep = r.mentors.filter((m: any) => bucketOf(m) === 'deployed').length
-    const bench = r.mentors.filter((m: any) => bucketOf(m) === 'bench').length
+    const cnt = (bk: string) => r.mentors.filter((m: any) => bucketOf(m) === bk).length
+    const under = cnt('in_training'), upsk = cnt('upskilling'), dep = cnt('deployed'), bench = cnt('bench')
+    const trainers = subjTrainerCount[r.subject] || 0
     return {
       key: 'subj_' + r.subject,
       title: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <b>{r.subject}</b>
         <Tag color="geekblue" style={{ margin: 0 }}>{r.mentors.length} mentor{r.mentors.length === 1 ? '' : 's'}</Tag>
-        {under > 0 && <Tag color="orange" style={{ margin: 0 }}>Under training {under}</Tag>}
-        {dep > 0 && <Tag color="blue" style={{ margin: 0 }}>Deployed {dep}</Tag>}
-        {bench > 0 && <Tag color="cyan" style={{ margin: 0 }}>Back to bench {bench}</Tag>}
+        <Tag color="blue" style={{ margin: 0 }}>{trainers} trainer{trainers === 1 ? '' : 's'}</Tag>
+        <Tag color="orange" style={{ margin: 0 }}>Under training {under}</Tag>
+        <Tag color="purple" style={{ margin: 0 }}>Upskilling {upsk}</Tag>
+        <Tag color="geekblue" style={{ margin: 0 }}>Deployed {dep}</Tag>
+        <Tag color="cyan" style={{ margin: 0 }}>Back to bench {bench}</Tag>
       </span>,
       children: r.mentors.slice().sort((a: any, b: any) => String(a.full_name).localeCompare(String(b.full_name))).map((m: any) => {
         const b = bucketOf(m)
@@ -2941,6 +2953,7 @@ function MentorGeneration() {
   const { message: msg } = AntApp.useApp()
   const [mentors, setMentors] = useState<any[]>([])
   const [deployTrainers, setDeployTrainers] = useState<any[]>([]) // active trainers — also deployable (v37)
+  const [subjTrainerCount, setSubjTrainerCount] = useState<Record<string, number>>({}) // program name → # of trainer/SME owners
   const [pubTopics, setPubTopics] = useState<any[]>([])
   const [myRatings, setMyRatings] = useState<any[]>([])
   const [rows, setRows] = useState<any>(null)
@@ -2988,6 +3001,15 @@ function MentorGeneration() {
     setMentors(visMentors)
     // active trainers AND team leads are deployable too — offered in the deployment picker and shown in the tabs
     setDeployTrainers((p.data || []).filter((x: any) => (x.role === 'trainer' || x.role === 'team_lead') && x.is_active))
+    // # of distinct trainer/SME owners per PROGRAM (main_subject name) — program owner + its subjects' owners
+    const [msAll, sjAll] = await Promise.all([
+      supabase.from('main_subject').select('id, name, default_trainer_id'),
+      supabase.from('subject').select('main_subject_id, default_trainer_id'),
+    ])
+    const msName: Record<string, string> = {}; const trSet: Record<string, Set<string>> = {}
+    ;(msAll.data || []).forEach((m: any) => { msName[m.id] = m.name; if (m.default_trainer_id) (trSet[m.name] = trSet[m.name] || new Set()).add(m.default_trainer_id) })
+    ;(sjAll.data || []).forEach((s: any) => { const pn = msName[s.main_subject_id]; if (pn && s.default_trainer_id) (trSet[pn] = trSet[pn] || new Set()).add(s.default_trainer_id) })
+    const stc: Record<string, number> = {}; Object.keys(trSet).forEach((k) => stc[k] = trSet[k].size); setSubjTrainerCount(stc)
     // deployment summary for pipeline counts (v34) — deployed / back-to-bench are derived from these
     if (MOCK_MENTOR_SUBTOPIC) setDeps(mockListDeployments())
     else { const dp = await supabase.from('mentor_deployment').select('mentor_id, status, updated_at, to_date'); setDeps(dp.error ? [] : (dp.data || [])) }
@@ -3169,9 +3191,11 @@ function MentorGeneration() {
     let ok = 0, fail = 0, lastErr = ''
     for (const mid of mids) {
       for (const tid of selTopicIds) {
-        const base: any = { mentor_id: mid, topic_id: tid, assigned_by: person?.id || null }
+        // reset state to 'active' + clear withdraw fields so RE-assigning a previously-withdrawn topic
+        // reactivates it (an upsert that omits state would leave a withdrawn row withdrawn → not reflected).
+        const base: any = { mentor_id: mid, topic_id: tid, assigned_by: person?.id || null, state: 'active', withdrawn_by: null, withdrawn_at: null, withdraw_reason: null }
         let { error } = await supabase.from('mentor_prep').upsert(base, { onConflict: 'mentor_id,topic_id' })
-        if (error && /assigned_by/.test(error.message)) { const { assigned_by, ...rest } = base; ({ error } = await supabase.from('mentor_prep').upsert(rest, { onConflict: 'mentor_id,topic_id' })) }
+        if (error && /assigned_by|withdraw|state|column/.test(error.message)) { const { assigned_by, withdrawn_by, withdrawn_at, withdraw_reason, ...rest } = base; ({ error } = await supabase.from('mentor_prep').upsert({ ...rest, state: 'active' }, { onConflict: 'mentor_id,topic_id' })) }
         if (error) { fail++; lastErr = error.message } else ok++
       }
       const m = mentors.find((x: any) => x.id === mid)
@@ -3421,7 +3445,7 @@ function MentorGeneration() {
     <PageHead title="My workspace" sub="Your training topics and mentor management" />
     <Tabs defaultActiveKey="content" items={[
       { key: 'content', label: 'Training topics', children: <ContentExplorer /> },
-      { key: 'pipeline', label: 'Pipeline & subjects', children: <MentorPipeline mentors={mentors} mentorSubjects={mentorSubjects} deps={deps} onChanged={load} /> },
+      { key: 'pipeline', label: 'Pipeline & subjects', children: <MentorPipeline mentors={mentors} mentorSubjects={mentorSubjects} deps={deps} subjTrainerCount={subjTrainerCount} onChanged={load} /> },
       { key: 'mentor', label: `Mentor under training (${trainingCount})`, children: <div>{kpis}{subjTrainingCards}<Tabs defaultActiveKey="prep" items={[
         { key: 'prep', label: 'Preparation board', children: <div>{assignCard}{boardCard}</div> },
         { key: 'daily', label: 'Daily corporate etiquette', children: dailyCard },
