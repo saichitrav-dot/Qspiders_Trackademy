@@ -1630,10 +1630,14 @@ function useEditingQueue() {
   useEffect(() => { if (person?.id) load() }, [person?.id])
   useAutoRefresh(() => { if (person?.id) load() })
   // a video stays in the queue until its Final output is a done state (Editing completed / Output completed)
-  const ready = (items || []).filter((i: any) => i.byCode.SHOOTING?.status === 'Completed' && !FO_DONE.includes(edits[i.id]?.fo || 'Pending'))
-  // editors see ONLY the videos assigned to them; everyone else sees all ready-to-edit
-  const scoped = isEditor ? ready.filter((i: any) => edits[i.id]?.editorId === person?.id) : ready
-  return { person, isEditor, isAdmin, items, edits, editors, scoped, load }
+  // every video whose shooting is done — the editable set. INCLUDES completed edits too, so their
+  // final-output status stays visible (doesn't vanish on completion) and the Final-output filter can show
+  // any status. "Ready to edit" (pending) is counted separately.
+  const editable = (items || []).filter((i: any) => i.byCode.SHOOTING?.status === 'Completed')
+  // editors see ONLY the videos assigned to them; everyone else sees all
+  const scoped = isEditor ? editable.filter((i: any) => edits[i.id]?.editorId === person?.id) : editable
+  const pendingCount = scoped.filter((i: any) => !FO_DONE.includes(edits[i.id]?.fo || 'Pending')).length
+  return { person, isEditor, isAdmin, items, edits, editors, scoped, pendingCount, load }
 }
 const FO_COLOR: any = { Pending: 'default', 'In Progress': 'blue', Reshoot: 'red', 'Editing completed': 'cyan', 'Output completed': 'green', Completed: 'green' }
 // the editor's single status — Final output (Pending · In Progress · Reshoot · Completed). Editable in the table.
@@ -1732,7 +1736,7 @@ function EditingQueue() {
   const q = useEditingQueue()
   if (!q.items) return <div style={{ display: 'grid', placeItems: 'center', height: 300 }}><Spin /></div>
   return <div>
-    <PageHead title="Editing Queue" sub={`${q.scoped.length} video(s) ready to edit${q.isEditor ? ' · assigned to you' : ''}`} />
+    <PageHead title="Editing Queue" sub={`${q.pendingCount} video(s) ready to edit · ${q.scoped.length} total${q.isEditor ? ' · assigned to you' : ''}`} />
     <EditingTable q={q} />
   </div>
 }
@@ -2031,6 +2035,16 @@ function WorkDashboard() {
     const all = await fetchAllItems()
     const inScope = await buildScope(person)
     const mine = all.filter(inScope)
+    // EDITOR: subjects/sub-topics whose editing OUTPUT is taken (final output completed) vs pending
+    let editorStats: any = null
+    if (person?.role === 'editor') {
+      const subjById: Record<string, string> = {}; all.forEach((it: any) => { subjById[it.id] = it.subject || '—' })
+      const et = await supabase.from('editing_task').select('content_item_id, final_output').eq('editor_id', person.id)
+      const taken: Record<string, number> = {}; const pend: Record<string, number> = {}
+      ;(et.data || []).forEach((x: any) => { const s = subjById[x.content_item_id] || '—'; if (FO_DONE.includes(x.final_output)) taken[s] = (taken[s] || 0) + 1; else pend[s] = (pend[s] || 0) + 1 })
+      const subjects = [...new Set([...Object.keys(taken), ...Object.keys(pend)])].sort()
+      editorStats = { subjects, taken, pend, takenItems: Object.values(taken).reduce((a: number, b: number) => a + b, 0), pendItems: Object.values(pend).reduce((a: number, b: number) => a + b, 0), takenSubjects: Object.keys(taken).length, pendSubjects: Object.keys(pend).length }
+    }
     let team: any[] = []
     if (isLead) {
       const p = await supabase.from('person').select('id, full_name, role, is_active, lead_id')
@@ -2050,7 +2064,7 @@ function WorkDashboard() {
         return { name: (m.full_name || '').split(' ')[0] || m.full_name, role: m.role, Assigned: ids.length, Done: done }
       }).filter((m: any) => m.Assigned > 0).sort((a: any, b: any) => b.Assigned - a.Assigned)
     }
-    setD({ mine, team })
+    setD({ mine, team, editorStats })
   }
   useEffect(() => { load() }, [person?.id])
   useAutoRefresh(load)
@@ -2105,6 +2119,21 @@ function WorkDashboard() {
   const team = d.team || []
   return <div>
     <PageHead title={`${firstName} · ${isLead ? 'team & personal' : 'my'} performance`} sub="How you and your work are performing — view only" />
+    {d.editorStats && <Card title="My editing — output taken vs pending" style={{ marginBottom: 16 }} styles={{ body: { padding: 16 } }}>
+      <Row gutter={[12, 12]} style={{ marginBottom: d.editorStats.subjects.length ? 12 : 0 }}>
+        <Col xs={12} md={6}><Card styles={{ body: { padding: 14 } }} style={{ background: '#f6fbf7' }}><Statistic title="Subjects — output taken" value={d.editorStats.takenSubjects} valueStyle={{ color: '#16a34a', fontWeight: 800 }} /></Card></Col>
+        <Col xs={12} md={6}><Card styles={{ body: { padding: 14 } }}><Statistic title={<span>Output taken <span style={{ fontSize: 10, color: '#9aa1ad' }}>· sub-topics</span></span>} value={d.editorStats.takenItems} valueStyle={{ color: '#16a34a', fontWeight: 800 }} /></Card></Col>
+        <Col xs={12} md={6}><Card styles={{ body: { padding: 14 } }} style={{ background: '#fff8f0' }}><Statistic title="Subjects — pending" value={d.editorStats.pendSubjects} valueStyle={{ color: '#c2790a', fontWeight: 800 }} /></Card></Col>
+        <Col xs={12} md={6}><Card styles={{ body: { padding: 14 } }}><Statistic title={<span>Pending <span style={{ fontSize: 10, color: '#9aa1ad' }}>· sub-topics</span></span>} value={d.editorStats.pendItems} valueStyle={{ color: '#c2790a', fontWeight: 800 }} /></Card></Col>
+      </Row>
+      {d.editorStats.subjects.length > 0 && <Table size="small" pagination={false} rowKey="subject" scroll={{ x: 'max-content' }}
+        dataSource={d.editorStats.subjects.map((s: string) => ({ subject: s, taken: d.editorStats.taken[s] || 0, pending: d.editorStats.pend[s] || 0 }))}
+        columns={[
+          { title: 'Subject', dataIndex: 'subject', render: (v: string) => <b>{v}</b> },
+          { title: 'Output taken', dataIndex: 'taken', width: 140, render: (v: number) => <span style={{ color: '#16a34a', fontWeight: 600 }}>{v}</span> },
+          { title: 'Pending', dataIndex: 'pending', width: 120, render: (v: number) => <span style={{ color: '#c2790a', fontWeight: 600 }}>{v}</span> },
+        ] as any} />}
+    </Card>}
     <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
       <DashStat label="My sub-topics" value={mine.length} />
       <DashStat label="Published" value={done} color="#16a34a" />
@@ -2488,7 +2517,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
           </div>)}
       </Modal>
     })()
-    const benchShown = bench.filter((m: any) => (!ql || String(m.full_name || '').toLowerCase().includes(ql)) && (!subjF.length || subjF.some((f: string) => subjKey(f) === subjKey(subjectOf[m.id]))))
+    const benchShown = bench.filter((m: any) => (!ql || [m.full_name, m.employee_id].some((x: any) => String(x || '').toLowerCase().includes(ql))) && (!subjF.length || subjF.some((f: string) => subjKey(f) === subjKey(subjectOf[m.id]))))
     const benchSubjOpts = (() => { const m: Record<string, string> = {}; bench.forEach((mm: any) => { const raw = String(subjectOf[mm.id] || '').trim(); if (raw && !m[subjKey(raw)]) m[subjKey(raw)] = raw }); return Object.values(m).sort() })()
     const cols = [
       { title: 'Mentor', dataIndex: 'full_name', render: (_: any, m: any) => <span><b>{m.full_name}</b>{NON_MENTOR_LABEL[m.role] ? <Tag color="blue" style={{ marginLeft: 6 }}>{NON_MENTOR_LABEL[m.role]}</Tag> : null}</span> },
@@ -2523,7 +2552,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     return <><div style={{ fontSize: 12, color: '#69707d', marginBottom: 10 }}>Mentors who have <b>completed a training</b> (Branch / Online / College / Corporate / College grooming) and are not on an active deployment — available to be mapped to another requirement or upskilled. Rating = average of their deployment feedback across all returns.</div>
       {ratingCards}
       <span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-        <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 280 }} />
+        <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search name / employee ID…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 280 }} />
         <Select mode="multiple" allowClear showSearch maxTagCount="responsive" placeholder="Filter by subject(s)…" style={{ minWidth: 240 }} value={subjF} onChange={setSubjF} options={benchSubjOpts.map((s) => ({ value: s, label: s }))} />
       </span>
       <Table size="middle" rowKey="id" columns={cols as any} dataSource={benchShown} pagination={{ pageSize: 12 }} scroll={{ x: 'max-content' }} locale={{ emptyText: <Empty description={ql ? `No mentors match “${q}”` : 'No mentors back on the bench yet — nobody has completed a training and returned.'} /> }} />
@@ -2546,7 +2575,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
       {d.status === 'approved' && <Button size="small" onClick={() => endDeployment(d)}>End</Button>}
     </span> },
   ]
-  const depShown = myDeps.filter((d: any) => (!ql || [nameById[d.mentor_id], d.deployment_type, d.details, d.status].some((x: any) => String(x || '').toLowerCase().includes(ql))) && (!subjF.length || subjF.some((f: string) => subjKey(f) === subjKey(d.subject))))
+  const depShown = myDeps.filter((d: any) => (!ql || [nameById[d.mentor_id], empById[d.mentor_id], d.deployment_type, d.details, d.status].some((x: any) => String(x || '').toLowerCase().includes(ql))) && (!subjF.length || subjF.some((f: string) => subjKey(f) === subjKey(d.subject))))
   const depSubjOpts = (() => { const m: Record<string, string> = {}; myDeps.forEach((d: any) => { const raw = String(d.subject || '').trim(); if (raw && !m[subjKey(raw)]) m[subjKey(raw)] = raw }); return Object.values(m).sort() })()
   // how many DISTINCT mentors are currently deployed (approved) under each deployment type.
   // A mentor with two approved deployments of the same type counts once; across types they count in each.
@@ -2574,7 +2603,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
       <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setForm({}); setAdd({ mentor_id: null }) }}>New deployment</Button>
     </div>
     <span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-      <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search by mentor, type, details or status…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 340 }} />
+      <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search name, employee ID, type, details, status…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 340 }} />
       <Select mode="multiple" allowClear showSearch maxTagCount="responsive" placeholder="Filter by subject(s)…" style={{ minWidth: 240 }} value={subjF} onChange={setSubjF} options={depSubjOpts.map((s) => ({ value: s, label: s }))} />
     </span>
     <Table size="middle" rowKey="id" columns={cols as any} dataSource={depShown} pagination={{ pageSize: 12 }}
@@ -2640,7 +2669,7 @@ const BUCKET_META: Record<string, { label: string; color: string }> = {
 }
 
 // Pipeline & subject-wise metrics + training-lifecycle controls (Ready to deploy / Upskill / Terminate / Dropout / Reinstate).
-function MentorPipeline({ mentors, mentorSubjects, deps, subjTrainerCount = {}, onChanged }: any) {
+function MentorPipeline({ mentors, mentorSubjects, deps, subjTrainers = {}, onChanged }: any) {
   const { person } = useAuth()
   const { message: msg } = AntApp.useApp()
   const canManage = person?.role === 'admin' || OWNER_ROLES.includes(person?.role)
@@ -2701,10 +2730,14 @@ function MentorPipeline({ mentors, mentorSubjects, deps, subjTrainerCount = {}, 
 
   const tagColor = (b: string) => LIFECYCLE_COLOR[b] || (b === 'deployed' ? 'blue' : b === 'bench' ? 'cyan' : 'default')
   // Subject → mentors tree: each subject expands to the mentors mapped to it with their current stage
+  // trainer status (they don't have mentor lifecycle) — deployed / back to bench / available, from deployments
+  const trReturned = new Set((deps || []).filter((d: any) => d.status === 'completed').map((d: any) => d.mentor_id))
+  const trStatus = (t: any) => activeDeployed.has(t.id) ? 'deployed' : trReturned.has(t.id) ? 'bench' : 'available'
+  const TR_STATUS_META: Record<string, { label: string; color: string }> = { deployed: { label: 'Deployed', color: 'blue' }, bench: { label: 'Back to bench', color: 'cyan' }, available: { label: 'Available', color: 'green' } }
   const subjectTree = subjectRows.map((r: any) => {
     const cnt = (bk: string) => r.mentors.filter((m: any) => bucketOf(m) === bk).length
     const under = cnt('in_training'), upsk = cnt('upskilling'), dep = cnt('deployed'), bench = cnt('bench')
-    const trainers = subjTrainerCount[r.subject] || 0
+    const trList = subjTrainers[r.subject] || []; const trainers = trList.length
     return {
       key: 'subj_' + r.subject,
       title: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -2716,7 +2749,8 @@ function MentorPipeline({ mentors, mentorSubjects, deps, subjTrainerCount = {}, 
         <Tag color="geekblue" style={{ margin: 0 }}>Deployed {dep}</Tag>
         <Tag color="cyan" style={{ margin: 0 }}>Back to bench {bench}</Tag>
       </span>,
-      children: r.mentors.slice().sort((a: any, b: any) => String(a.full_name).localeCompare(String(b.full_name))).map((m: any) => {
+      children: [
+        ...r.mentors.slice().sort((a: any, b: any) => String(a.full_name).localeCompare(String(b.full_name))).map((m: any) => {
         const b = bucketOf(m)
         return {
           key: 'subj_' + r.subject + '_' + m.id, isLeaf: true,
@@ -2728,6 +2762,19 @@ function MentorPipeline({ mentors, mentorSubjects, deps, subjTrainerCount = {}, 
           </span>,
         }
       }),
+        ...trList.slice().sort((a: any, b: any) => String(a.full_name).localeCompare(String(b.full_name))).map((t: any) => {
+          const s = trStatus(t)
+          return {
+            key: 'subj_' + r.subject + '_tr_' + t.id, isLeaf: true,
+            title: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span>{t.full_name}</span>
+              <Tag color="blue" style={{ margin: 0 }}>Trainer</Tag>
+              {t.employee_id ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad' }}>{t.employee_id}</span> : null}
+              <Tag color={TR_STATUS_META[s].color} style={{ margin: 0 }}>{TR_STATUS_META[s].label}</Tag>
+            </span>,
+          }
+        }),
+      ],
     }
   })
 
@@ -2823,7 +2870,7 @@ function MentorAttendance({ mentors }: any) {
   }
   const onHoliday = (mid: string) => hols.some((h: any) => h.mentor_id === mid && dstr >= h.from_date && dstr <= h.to_date)
   const ql = q.trim().toLowerCase()
-  const shown = ql ? mentors.filter((m: any) => String(m.full_name || '').toLowerCase().includes(ql)) : mentors
+  const shown = ql ? mentors.filter((m: any) => [m.full_name, m.employee_id].some((x: any) => String(x || '').toLowerCase().includes(ql))) : mentors
   async function markAllPresent() { for (const m of shown) { if (!att[m.id]?.status) await setStatus(m.id, 'Present') } msg.success('Unmarked mentors set to Present ✓') }
   // export the FULL attendance register — every date marked to date, one column per day + per-status totals
   async function downloadReport() {
@@ -2870,7 +2917,7 @@ function MentorAttendance({ mentors }: any) {
       {ATT_STATUS.map(s => <Tag key={s} color={attColor[s]}>{s}: {counts[s]}</Tag>)}
       <Tag>Not marked: {notMarked}</Tag>
     </div>
-    <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 280, marginBottom: 12 }} />
+    <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search name / employee ID…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 280, marginBottom: 12 }} />
     <Table size="middle" rowKey="id" loading={loading} columns={cols as any} dataSource={shown} pagination={{ pageSize: 15 }}
       locale={{ emptyText: <Empty description={ql ? `No mentors match “${q}”` : 'No mentors to mark.'} /> }} />
   </div>
@@ -2885,6 +2932,7 @@ function MentorHolidays({ mentors }: any) {
   const [form, setForm] = useState<any>({})
   const [q, setQ] = useState('')
   const nameById: any = Object.fromEntries(mentors.map((m: any) => [m.id, m.full_name]))
+  const empById: any = Object.fromEntries(mentors.map((m: any) => [m.id, m.employee_id || '']))
   const mentorIds = new Set(mentors.map((m: any) => m.id))
   async function load() {
     if (MOCK_MENTOR_SUBTOPIC) { setHols(mockListHolidays()); return }
@@ -2917,7 +2965,7 @@ function MentorHolidays({ mentors }: any) {
   if (!hols) return <div style={{ display: 'grid', placeItems: 'center', height: 200 }}><Spin /></div>
   const mine = hols.filter((h: any) => mentorIds.has(h.mentor_id))
   const ql = q.trim().toLowerCase()
-  const shown = ql ? mine.filter((h: any) => String(nameById[h.mentor_id] || '').toLowerCase().includes(ql) || String(h.reason || '').toLowerCase().includes(ql)) : mine
+  const shown = ql ? mine.filter((h: any) => String(nameById[h.mentor_id] || '').toLowerCase().includes(ql) || String(empById[h.mentor_id] || '').toLowerCase().includes(ql) || String(h.reason || '').toLowerCase().includes(ql)) : mine
   const daysOf = (h: any) => dayjs(h.to_date).diff(dayjs(h.from_date), 'day') + 1
   const lbl: any = { fontSize: 12, fontWeight: 600, color: '#69707d', margin: '10px 0 4px' }
   const cols = [
@@ -2936,7 +2984,7 @@ function MentorHolidays({ mentors }: any) {
       <div style={{ fontSize: 12, color: '#69707d' }}>Log and track mentor holidays / leave.</div>
       <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setEditId(null); setForm({}); setAdd(true) }}>Log holiday</Button>
     </div>
-    <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor or reason…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 300, marginBottom: 12 }} />
+    <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search name / employee ID / reason…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 320, marginBottom: 12 }} />
     <Table size="middle" rowKey="id" columns={cols as any} dataSource={shown} pagination={{ pageSize: 12 }} locale={{ emptyText: <Empty description={ql ? `No holidays match “${q}”` : 'No holidays logged yet.'} /> }} />
     {add && <Modal open title={editId ? 'Edit holiday' : 'Log holiday'} okText="Save" onOk={submitAdd} onCancel={() => { setAdd(false); setEditId(null); setForm({}) }} destroyOnClose>
       <div style={lbl}>Mentor</div><Select showSearch optionFilterProp="label" style={{ width: '100%' }} placeholder="Select a mentor" value={form.mentor_id} onChange={(v) => setForm((f: any) => ({ ...f, mentor_id: v }))} options={mentors.map((m: any) => ({ value: m.id, label: m.full_name }))} />
@@ -2953,7 +3001,7 @@ function MentorGeneration() {
   const { message: msg } = AntApp.useApp()
   const [mentors, setMentors] = useState<any[]>([])
   const [deployTrainers, setDeployTrainers] = useState<any[]>([]) // active trainers — also deployable (v37)
-  const [subjTrainerCount, setSubjTrainerCount] = useState<Record<string, number>>({}) // program name → # of trainer/SME owners
+  const [subjTrainers, setSubjTrainers] = useState<Record<string, any[]>>({}) // program name → trainer/SME owner objects
   const [pubTopics, setPubTopics] = useState<any[]>([])
   const [myRatings, setMyRatings] = useState<any[]>([])
   const [rows, setRows] = useState<any>(null)
@@ -3009,10 +3057,11 @@ function MentorGeneration() {
     const msName: Record<string, string> = {}; const trSet: Record<string, Set<string>> = {}
     ;(msAll.data || []).forEach((m: any) => { msName[m.id] = m.name; if (m.default_trainer_id) (trSet[m.name] = trSet[m.name] || new Set()).add(m.default_trainer_id) })
     ;(sjAll.data || []).forEach((s: any) => { const pn = msName[s.main_subject_id]; if (pn && s.default_trainer_id) (trSet[pn] = trSet[pn] || new Set()).add(s.default_trainer_id) })
-    const stc: Record<string, number> = {}; Object.keys(trSet).forEach((k) => stc[k] = trSet[k].size); setSubjTrainerCount(stc)
+    const trainerById: Record<string, any> = {}; (p.data || []).forEach((x: any) => trainerById[x.id] = x)
+    const stObj: Record<string, any[]> = {}; Object.keys(trSet).forEach((k) => stObj[k] = [...trSet[k]].map((id) => trainerById[id]).filter(Boolean)); setSubjTrainers(stObj)
     // deployment summary for pipeline counts (v34) — deployed / back-to-bench are derived from these
     if (MOCK_MENTOR_SUBTOPIC) setDeps(mockListDeployments())
-    else { const dp = await supabase.from('mentor_deployment').select('mentor_id, status, updated_at, to_date'); setDeps(dp.error ? [] : (dp.data || [])) }
+    else { const dp = await supabase.from('mentor_deployment').select('mentor_id, status, updated_at, to_date, deployment_type'); setDeps(dp.error ? [] : (dp.data || [])) }
     const nm: any = {}; (p.data || []).forEach((x: any) => nm[x.id] = x.full_name); setNameById(nm)
     // a Lead/Manager sees ONLY the programs they OWN (Navya = Python only), regardless of mentor tagging
     let lp: Set<string> | null = null
@@ -3225,6 +3274,9 @@ function MentorGeneration() {
   // "Back to bench" = has COMPLETED any training (Branch / Online / College / Corporate / College grooming).
   const activeDeployedSet = new Set(deps.filter((d: any) => d.status === 'approved').map((d: any) => d.mentor_id))
   const returnedSet = benchReturnedSet(mentors, deps)
+  // Attendance & Holidays: only ACTIVE mentors, and NOT those currently deployed to a Branch.
+  const branchDeployed = new Set(deps.filter((d: any) => d.status === 'approved' && d.deployment_type === 'Branch').map((d: any) => d.mentor_id))
+  const attendanceMentors = mentors.filter((m: any) => m.is_active !== false && !branchDeployed.has(m.id))
   const bcount: Record<string, number> = {}
   mentors.forEach((m: any) => { const b = mentorBucket(m, activeDeployedSet as Set<string>, returnedSet as Set<string>); bcount[b] = (bcount[b] || 0) + 1 })
   const trainingCount = (bcount.in_training || 0) + (bcount.upskilling || 0)
@@ -3445,7 +3497,7 @@ function MentorGeneration() {
     <PageHead title="My workspace" sub="Your training topics and mentor management" />
     <Tabs defaultActiveKey="content" items={[
       { key: 'content', label: 'Training topics', children: <ContentExplorer /> },
-      { key: 'pipeline', label: 'Pipeline & subjects', children: <MentorPipeline mentors={mentors} mentorSubjects={mentorSubjects} deps={deps} subjTrainerCount={subjTrainerCount} onChanged={load} /> },
+      { key: 'pipeline', label: 'Pipeline & subjects', children: <MentorPipeline mentors={mentors} mentorSubjects={mentorSubjects} deps={deps} subjTrainers={subjTrainers} onChanged={load} /> },
       { key: 'mentor', label: `Mentor under training (${trainingCount})`, children: <div>{kpis}{subjTrainingCards}<Tabs defaultActiveKey="prep" items={[
         { key: 'prep', label: 'Preparation board', children: <div>{assignCard}{boardCard}</div> },
         { key: 'daily', label: 'Daily corporate etiquette', children: dailyCard },
@@ -3453,8 +3505,8 @@ function MentorGeneration() {
       { key: 'deployed', label: `Mentors deployed (${bcount.deployed || 0})`, children: <MentorDeployments mentors={mentors} trainers={deployTrainers} mode="deployed" subjectOf={subjectByMentor} /> },
       { key: 'bench', label: `Mentors Back to bench (${bcount.bench || 0})`, children: <MentorDeployments mentors={mentors} trainers={deployTrainers} mode="bench" subjectOf={subjectByMentor} /> },
       { key: 'holidays', label: 'Attendance & Holidays', children: <Tabs defaultActiveKey="att" items={[
-        { key: 'att', label: 'Daily attendance', children: <MentorAttendance mentors={mentors} /> },
-        { key: 'hol', label: 'Holidays', children: <MentorHolidays mentors={mentors} /> },
+        { key: 'att', label: 'Daily attendance', children: <MentorAttendance mentors={attendanceMentors} /> },
+        { key: 'hol', label: 'Holidays', children: <MentorHolidays mentors={attendanceMentors} /> },
       ]} /> },
       { key: 'analytics', label: 'Mentor analytics', children: <MentorAnalytics /> },
     ]} />
@@ -3668,9 +3720,9 @@ function pruneDoneTree(nodes: any[], done: Set<string>, keep: Set<string>): any[
 function WeeklyGoals() {
   const { person } = useAuth()
   const { message: msg } = AntApp.useApp()
-  const isAdmin = person?.role === 'admin'
+  const isAdmin = person?.role === 'admin'; const isEditor = person?.role === 'editor'
   const [week, setWeek] = useState<any>(mondayOf(dayjs()))
-  const [kind, setKind] = useState<'recording' | 'editing'>('recording')
+  const [kind, setKind] = useState<'recording' | 'editing'>(person?.role === 'editor' ? 'editing' : 'recording') // editors: editing goals only
   const [programId, setProgramId] = useState<any>(null)
   const [programs, setPrograms] = useState<any[]>([])
   const [topicMeta, setTopicMeta] = useState<any>({})        // topicId -> { name, subject, chapter, program, programId, ciIds:[] }
@@ -3678,7 +3730,10 @@ function WeeklyGoals() {
   const [goals, setGoals] = useState<any[]>([])              // weekly_goal rows for the week (with topicIds)
   const [recEver, setRecEver] = useState<Set<string>>(new Set()) // sub-topics recorded (Shooting OR Review done) EVER, any week
   const [recFull, setRecFull] = useState<Set<string>>(new Set()) // FULLY recorded: Shooting AND Shooting-Review both done → drop off the list
-  const [editEver, setEditEver] = useState<Set<string>>(new Set()) // sub-topics edited (Editing done) EVER, any week
+  const [editDone, setEditDone] = useState<Set<string>>(new Set()) // sub-topics achieved (final output = Editing/Output completed)
+  const [outputComplete, setOutputComplete] = useState<Set<string>>(new Set()) // final output = 'Output completed' → drops off the list
+  const [editInProgress, setEditInProgress] = useState<Set<string>>(new Set()) // final output = 'In Progress'
+  const [editorMap, setEditorMap] = useState<any>({}) // content_item_id -> editor_id (Weekly Goals editing mode)
   const [prevGoals, setPrevGoals] = useState<any[]>([])           // the PREVIOUS week's goals (for carry-forward)
   const [ownerMap, setOwnerMap] = useState<any>({})  // content_item_id -> trainer_id (who owns the sub-topic)
   const [names, setNames] = useState<any>({})        // person_id -> full_name
@@ -3725,14 +3780,18 @@ function WeeklyGoals() {
     // sub-topics that are ALREADY completed (any week) — recording = Shooting or Shooting Review done,
     // editing = Editing done. Used to drop them from future goals (never carry / re-select a done item).
     const allI = await fetchAllItems()
-    const re = new Set<string>(); const ee = new Set<string>(); const rf = new Set<string>()
+    const re = new Set<string>(); const rf = new Set<string>()
     allI.forEach((it: any) => {
       const shoot = it.byCode.SHOOTING?.status === 'Completed', rev = it.byCode.SHOOT_REVIEW?.status === 'Completed'
       if (shoot || rev) re.add(it.id)   // achieved (recording milestone hit)
       if (shoot && rev) rf.add(it.id)   // FULLY recorded → hidden from the goals list (still counted as achieved)
-      if (it.byCode.EDITING?.status === 'Completed') ee.add(it.id)
     })
-    setRecEver(re); setEditEver(ee); setRecFull(rf)
+    setRecEver(re); setRecFull(rf)
+    // editing: the EDITOR + the FINAL-OUTPUT status per sub-topic — Weekly Goals editing mode mirrors the Editing feature
+    const et = await selectAll('editing_task', 'content_item_id, editor_id, final_output')
+    const edm: any = {}; const edone = new Set<string>(); const outc = new Set<string>(); const einp = new Set<string>()
+    et.forEach((x: any) => { if (!x.content_item_id) return; if (x.editor_id) edm[x.content_item_id] = x.editor_id; if (FO_DONE.includes(x.final_output)) edone.add(x.content_item_id); if (x.final_output === 'Output completed') outc.add(x.content_item_id); if (x.final_output === 'In Progress') einp.add(x.content_item_id) })
+    setEditorMap(edm); setEditDone(edone); setOutputComplete(outc); setEditInProgress(einp)
   }
   // week-bound: the goals plus what was actually recorded / edited that week
   async function loadWeek() {
@@ -3750,7 +3809,7 @@ function WeeklyGoals() {
       const pg = await supabase.from('weekly_goal').select('id, program_id, week_start, kind, weekly_goal_item(content_item_id)').eq('week_start', prevStart)
       setPrevGoals(pg.error ? [] : (pg.data || []).map((x: any) => ({ ...x, itemIds: (x.weekly_goal_item || []).map((t: any) => t.content_item_id) })))
     }
-    // Achievement is now cumulative (recEver/editEver, loaded in loadStatic) — an item counts as
+    // Achievement is now cumulative (recEver/editDone, loaded in loadStatic) — an item counts as
     // achieved once its Shooting/Shooting-Review (or Editing) stage is Completed, in any week — so
     // there is no per-week completion set to compute here.
     setBusy(false)
@@ -3764,28 +3823,28 @@ function WeeklyGoals() {
     const g = goals.find((x: any) => x.program_id === programId && x.kind === kind)
     if (g) { setChecked((g.itemIds || []).map((id: string) => 'ci_' + id)); return }
     const pg = prevGoals.find((x: any) => x.program_id === programId && x.kind === kind)
-    const done = kind === 'recording' ? recEver : editEver
+    const done = kind === 'recording' ? recEver : editDone
     const carry = (pg?.itemIds || []).filter((id: string) => !done.has(id)) // unfinished only
     setChecked(carry.map((id: string) => 'ci_' + id))
-  }, [programId, kind, goals, prevGoals, recEver, editEver])
+  }, [programId, kind, goals, prevGoals, recEver, editDone])
 
   // each goal item is a SUB-TOPIC (content_item): met when it was recorded / edited that week
   // A goal sub-topic is ACHIEVED once its recording (Shooting OR Shooting-Review) / editing stage is
-  // Completed — cumulatively, regardless of which week the completion actually happened (recEver/editEver).
+  // Completed — cumulatively, regardless of which week the completion actually happened (recEver/editDone).
   // If it is NOT yet achieved but was already targeted in the PREVIOUS week's goal, it rolled over
   // unfinished, so it is shown as "Carried forward" instead of a plain "Pending".
   const goalItems = (g: any) => {
-    const done = kind === 'recording' ? recEver : editEver
+    const done = kind === 'recording' ? recEver : editDone
     const prevSet = new Set<string>((prevGoals.find((x: any) => x.program_id === g?.program_id && x.kind === kind)?.itemIds) || [])
-    return (g?.itemIds || []).map((id: string) => { const met = done.has(id); const fromPrev = prevSet.has(id); return { id, ...(topicMeta[id] || { name: '(removed sub-topic)' }), trainer: names[ownerMap[id]] || null, met, fromPrev, carried: !met && fromPrev } })
+    return (g?.itemIds || []).map((id: string) => { const met = done.has(id); const fromPrev = prevSet.has(id); return { id, ...(topicMeta[id] || { name: '(removed sub-topic)' }), trainer: names[ownerMap[id]] || null, editor: names[editorMap[id]] || null, met, fromPrev, carried: !met && fromPrev, inProgress: editInProgress.has(id) } })
       .sort((a: any, b: any) => (a.subject || '').localeCompare(b.subject || '') || (a.topicName || '').localeCompare(b.topicName || '') || (a.name || '').localeCompare(b.name || ''))
   }
   // Rows to DISPLAY in the status tables: a FRESH (not carried) fully-completed item drops off
   // (recording = both Shooting & Shooting-Review done; editing = Editing done). A CARRIED-FORWARD item
   // always stays visible — shown green as Achieved once completed. Hidden items still count in metrics.
-  const shownItems = (g: any) => goalItems(g).filter((t: any) => { const fullyDone = kind === 'recording' ? recFull.has(t.id) : editEver.has(t.id); return !fullyDone || t.fromPrev })
+  const shownItems = (g: any) => goalItems(g).filter((t: any) => { if (kind === 'editing') return !outputComplete.has(t.id); const fullyDone = recFull.has(t.id); return !fullyDone || t.fromPrev })
   // goal picker with already-completed sub-topics removed (keep any that are already in this week's goal)
-  const pickerDone = kind === 'recording' ? recEver : editEver
+  const pickerDone = kind === 'recording' ? recEver : editDone
   const pickerKeep = new Set<string>((goals.find((x: any) => x.program_id === programId && x.kind === kind)?.itemIds) || [])
   const pickerTree = programId ? pruneDoneTree(treeByProgram[programId] || [], pickerDone, pickerKeep) : []
 
@@ -3815,8 +3874,8 @@ function WeeklyGoals() {
   const pct = allItems.length ? Math.round((metCount / allItems.length) * 100) : 0
   // per-trainer performance on THIS week's goal sub-topics (who owns them, how many they got done)
   const byTrainer: any = {}
-  allItems.forEach((t: any) => { const nm = t.trainer || 'Unassigned'; const e = byTrainer[nm] = byTrainer[nm] || { name: nm, assigned: 0, achieved: 0, unassigned: !t.trainer, subjects: new Set() }; e.assigned++; if (t.met) e.achieved++; if (t.subject) e.subjects.add(t.subject) })
-  const trainerPerf = (Object.values(byTrainer) as any[]).map((e: any) => ({ ...e, subjects: [...e.subjects], pct: e.assigned ? Math.round(e.achieved / e.assigned * 100) : 0, done: e.assigned > 0 && e.achieved === e.assigned }))
+  allItems.forEach((t: any) => { const perf = kind === 'editing' ? t.editor : t.trainer; const nm = perf || 'Unassigned'; const e = byTrainer[nm] = byTrainer[nm] || { name: nm, assigned: 0, achieved: 0, inProgress: 0, unassigned: !perf, subjects: new Set(), inProgTr: new Set() }; e.assigned++; if (t.met) e.achieved++; if (t.inProgress) { e.inProgress++; if (t.trainer) e.inProgTr.add(t.trainer) } if (t.subject) e.subjects.add(t.subject) })
+  const trainerPerf = (Object.values(byTrainer) as any[]).map((e: any) => ({ ...e, subjects: [...e.subjects], inProgTr: [...e.inProgTr], pct: e.assigned ? Math.round(e.achieved / e.assigned * 100) : 0, done: e.assigned > 0 && e.achieved === e.assigned }))
     // achievers first (fully hit their target), then those closest to the target, then unassigned last
     .sort((a: any, b: any) => (a.unassigned ? 1 : 0) - (b.unassigned ? 1 : 0) || (b.done ? 1 : 0) - (a.done ? 1 : 0) || b.pct - a.pct || b.achieved - a.achieved)
   const maxAch = trainerPerf.reduce((m: number, e: any) => e.unassigned ? m : Math.max(m, e.achieved), 0)
@@ -3826,10 +3885,14 @@ function WeeklyGoals() {
 
   const itemCols = [
     { title: 'Sub-topic', render: (_: any, r: any) => <div><div style={{ fontWeight: 600 }}>{r.name}</div><div style={{ fontSize: 11, color: '#9aa1ad' }}>{[r.subject, r.chapter, r.topicName].filter(Boolean).join(' › ')}</div></div> },
-    { title: 'Trainer', width: 170, render: (_: any, r: any) => r.trainer ? <span><Avatar size={20} style={{ background: '#c2410c', marginRight: 6, fontSize: 10 }}>{(r.trainer || '?')[0]}</Avatar>{r.trainer}</span> : <span style={{ color: '#9aa1ad' }}>Unassigned</span> },
+    { title: kind === 'editing' ? 'Editor / Trainer' : 'Trainer', width: 190, render: (_: any, r: any) => <span>
+      {r.trainer ? <span><Avatar size={20} style={{ background: '#c2410c', marginRight: 6, fontSize: 10 }}>{(r.trainer || '?')[0]}</Avatar>{r.trainer}</span> : <span style={{ color: '#9aa1ad' }}>Unassigned</span>}
+      {kind === 'editing' ? <span style={{ display: 'block', fontSize: 11, color: '#9aa1ad' }}>Editor: {r.editor || '—'}</span> : null}
+    </span> },
     { title: 'Status', width: 170, render: (_: any, r: any) => r.met ? <Tag color="green">Achieved ({kindLabel})</Tag> : r.carried ? <Tag color="gold">Carried forward</Tag> : <Tag color="orange">Pending</Tag> },
   ]
   const progCols = [
+    { title: 'Sl No', width: 70, render: (_: any, __: any, i: number) => <span style={{ color: '#9aa1ad' }}>{i + 1}</span> },
     { title: 'Program', dataIndex: 'program_id', render: (pid: string) => <b>{programs.find((p: any) => p.id === pid)?.name || '—'}</b> },
     { title: 'Sub-topics', render: (_: any, g: any) => goalItems(g).length },
     { title: 'Achieved', render: (_: any, g: any) => { const ts = goalItems(g); const m = ts.filter((t: any) => t.met).length; return <span>{m} / {ts.length}</span> } },
@@ -3842,7 +3905,7 @@ function WeeklyGoals() {
         extra={MOCK_GOALS ? <Tag color="gold">Mock mode — goals saved in this browser only</Tag> : undefined} />
       <Card styles={{ body: { padding: 16 } }} style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Segmented value={kind} onChange={(v: any) => setKind(v)} options={GOAL_KINDS} />
+          {!isEditor && <Segmented value={kind} onChange={(v: any) => setKind(v)} options={GOAL_KINDS} />}
           <DatePicker picker="week" allowClear={false} value={week} onChange={(d: any) => d && setWeek(mondayOf(d))} />
           <span style={{ fontSize: 12, color: '#9aa1ad' }}>{week.format('DD MMM')} – {week.add(6, 'day').format('DD MMM YYYY')}</span>
           <Select placeholder="All programs" allowClear showSearch optionFilterProp="label" style={{ minWidth: 180 }} value={programId} onChange={setProgramId} options={programs.map((p: any) => ({ value: p.id, label: p.name }))} />
@@ -3871,14 +3934,16 @@ function WeeklyGoals() {
       )}
 
       {!missing && allItems.length > 0 && (
-        <Card title="Trainer performance — this week's goal" size="small" style={{ marginBottom: 16 }}
-          extra={<span style={{ fontSize: 12, color: '#9aa1ad' }}>Who owns the target sub-topics and how many they've {kindLabel}</span>}>
+        <Card title={kind === 'editing' ? "Editors Performance — this week's goal" : "Trainer performance — this week's goal"} size="small" style={{ marginBottom: 16 }}
+          extra={<span style={{ fontSize: 12, color: '#9aa1ad' }}>{kind === 'editing' ? 'Which editor is assigned and how many they have edited' : "Who owns the target sub-topics and how many they've recorded"}</span>}>
           <Table rowKey="name" size="small" pagination={false} dataSource={trainerPerf}
             columns={[
-              { title: 'Trainer', render: (_: any, e: any) => e.unassigned ? <span style={{ color: '#9aa1ad' }}>Unassigned</span> : <span><Avatar size={22} style={{ background: '#c2410c', marginRight: 8, fontSize: 11 }}>{(e.name || '?')[0]}</Avatar>{e.name}{!e.unassigned && e.achieved === maxAch && maxAch > 0 ? <Tag color="orange" style={{ marginLeft: 8 }}>★ Top</Tag> : null}</span> },
+              { title: 'Sl No', width: 70, render: (_: any, __: any, i: number) => <span style={{ color: '#9aa1ad' }}>{i + 1}</span> },
+              { title: kind === 'editing' ? 'Editor' : 'Trainer', render: (_: any, e: any) => e.unassigned ? <span style={{ color: '#9aa1ad' }}>Unassigned</span> : <span><Avatar size={22} style={{ background: '#c2410c', marginRight: 8, fontSize: 11 }}>{(e.name || '?')[0]}</Avatar>{e.name}{!e.unassigned && e.achieved === maxAch && maxAch > 0 ? <Tag color="orange" style={{ marginLeft: 8 }}>★ Top</Tag> : null}</span> },
               { title: 'Subject', width: 200, render: (_: any, e: any) => e.subjects.length ? e.subjects.join(', ') : <span style={{ color: '#9aa1ad' }}>—</span> },
               { title: 'Targeted', width: 100, render: (_: any, e: any) => e.assigned },
               { title: `Achieved (${kindLabel})`, width: 130, render: (_: any, e: any) => <b style={{ color: e.achieved ? '#16a34a' : '#9aa1ad' }}>{e.achieved}</b> },
+              ...(kind === 'editing' ? [{ title: 'Editing in progress', width: 220, render: (_: any, e: any) => e.inProgress ? <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}><Tag color="blue" style={{ margin: 0, width: 'fit-content' }}>{e.inProgress} in progress</Tag>{e.inProgTr?.length ? <span style={{ fontSize: 11, color: '#69707d' }}>Trainer: {e.inProgTr.join(', ')}</span> : null}</span> : <span style={{ color: '#9aa1ad' }}>—</span> }] : []),
               { title: 'Status', width: 150, render: (_: any, e: any) => e.unassigned ? <span style={{ color: '#9aa1ad' }}>—</span> : e.done ? <Tag color="green">Achieved ✓</Tag> : e.achieved > 0 ? <Tag color="orange">Reaching target</Tag> : <Tag>Not started</Tag> },
               { title: '% done', width: 200, render: (_: any, e: any) => <Progress percent={e.pct} size="small" strokeColor={e.pct === 100 ? '#16a34a' : PRIMARY} /> },
             ] as any} />
@@ -3892,7 +3957,7 @@ function WeeklyGoals() {
           </Card>
         : <Card title="All programs — this week" size="small">
             <Table rowKey="id" size="small" columns={progCols as any} dataSource={kindGoals} loading={busy} pagination={false}
-              expandable={{ expandedRowRender: (g: any) => <Table rowKey="id" size="small" columns={itemCols as any} dataSource={shownItems(g)} pagination={false} /> }}
+              expandable={{ expandedRowRender: (g: any) => <Table rowKey="id" size="small" columns={itemCols as any} dataSource={goalItems(g)} pagination={false} /> }}
               locale={{ emptyText: <Empty description={`No ${kind} goals set for any program this week.`} /> }} />
           </Card>)}
     </div>
@@ -5656,8 +5721,20 @@ function Assignments() {
 function EditorMyWork() {
   const q = useEditingQueue()
   if (!q.items) return <div style={{ display: 'grid', placeItems: 'center', height: 300 }}><Spin /></div>
+  // subjects this editor has COMPLETED editing (final output done) — cumulative, till date
+  const completed = q.scoped.filter((i: any) => FO_DONE.includes(q.edits[i.id]?.fo || 'Pending'))
+  const bySubj: Record<string, number> = {}
+  completed.forEach((i: any) => { const s = i.subject || '—'; bySubj[s] = (bySubj[s] || 0) + 1 })
+  const subjRows = Object.keys(bySubj).sort((a, b) => bySubj[b] - bySubj[a])
   return <div>
-    <PageHead title="My Work" sub={`${q.scoped.length} video(s) assigned to you to edit`} />
+    <PageHead title="My Work" sub={`${q.pendingCount} video(s) to edit · ${completed.length} completed till date`} />
+    {subjRows.length > 0 && <Card size="small" title="Editing completed by subject — till date" style={{ marginBottom: 16 }} extra={<span style={{ fontSize: 11, color: '#9aa1ad' }}>{completed.length} sub-topic{completed.length === 1 ? '' : 's'} across {subjRows.length} subject{subjRows.length === 1 ? '' : 's'}</span>}>
+      <Row gutter={[12, 12]}>
+        {subjRows.map((s) => <Col xs={12} md={8} lg={6} key={s}>
+          <Card styles={{ body: { padding: 14 } }}><Statistic title={<span style={{ fontSize: 12 }}>{s}</span>} value={bySubj[s]} suffix={<span style={{ fontSize: 11, color: '#9aa1ad' }}>completed</span>} valueStyle={{ color: '#16a34a', fontWeight: 800, fontSize: 22 }} /></Card>
+        </Col>)}
+      </Row>
+    </Card>}
     <EditingTable q={q} />
   </div>
 }
