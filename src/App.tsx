@@ -340,6 +340,12 @@ function CommandCenter() {
     const dueRes = await supabase.from('main_subject').select('name,due_date')
     const dueByProg: Record<string, string | null> = {}; (dueRes.data || []).forEach((r: any) => { dueByProg[r.name] = r.due_date })
     let items = await fetchAllItems()
+    // editing completion by subject (for the graph) — Editing completed vs Output completed, from editing_task
+    const subjById0: Record<string, string> = {}; items.forEach((it: any) => { subjById0[it.id] = it.subject || '—' })
+    const etAll = await supabase.from('editing_task').select('content_item_id, final_output')
+    const editBySubj: Record<string, { ec: number; oc: number }> = {}
+    ;(etAll.data || []).forEach((x: any) => { const s = subjById0[x.content_item_id]; if (!s) return; const e = editBySubj[s] = editBySubj[s] || { ec: 0, oc: 0 }; if (x.final_output === 'Editing completed') e.ec++; else if (x.final_output === 'Output completed') e.oc++ })
+    const editingData = Object.keys(editBySubj).map((s) => ({ name: s, 'Editing completed': editBySubj[s].ec, 'Output completed': editBySubj[s].oc })).filter((d: any) => d['Editing completed'] || d['Output completed']).sort((a: any, b: any) => (b['Editing completed'] + b['Output completed']) - (a['Editing completed'] + a['Output completed']))
     if (!seesAll && person?.id) {
       const inScope = await buildScope(person)
       items = items.filter(inScope)
@@ -364,7 +370,7 @@ function CommandCenter() {
     const subjectRows = Object.values(subjMap).map((s: any) => ({ subject_id: s.subject_id, name: s.name, items: s.items, published: s.published, pending: s.items - s.published, completion_pct: s.items ? Math.round(s.sumc / s.items) : 0 })).sort((a: any, b: any) => b.completion_pct - a.completion_pct)
     const programRows = Object.values(progMap).map((p: any) => ({ name: p.name, items: p.items, published: p.published, pending: p.items - p.published, completion: p.items ? Math.round(p.sumc / p.items) : 0, due_date: dueByProg[p.name] || null })).sort((a: any, b: any) => b.items - a.items)
     const stageOrder = [{ seq: 1, name: 'PPT' }, { seq: 2, name: 'Script' }, { seq: 3, name: 'Presentation' }, { seq: 4, name: 'Shooting' }, { seq: 5, name: 'Shooting Review' }, { seq: 6, name: 'Editing' }, { seq: 7, name: 'Final Review' }]
-    setD({ programCount: programRows.length, scoped: !seesAll, itemCount, pending: itemCount - done, people: people.count || 0, subjects: subjectsC.count || 0, topics: topicsC.count || 0, started, done, overall: itemCount ? Math.round((weightedDone / itemCount) * 100) : 0, dist, stageOrder, subjectRows, programRows,
+    setD({ editingData, programCount: programRows.length, scoped: !seesAll, itemCount, pending: itemCount - done, people: people.count || 0, subjects: subjectsC.count || 0, topics: topicsC.count || 0, started, done, overall: itemCount ? Math.round((weightedDone / itemCount) * 100) : 0, dist, stageOrder, subjectRows, programRows,
       // true catalog totals across the whole tree (server-side counts — not affected by the 1000-row fetch cap)
       treeTotals: { programs: programsC.count || 0, subjects: subjectsC.count || 0, chapters: chaptersC.count || 0, topics: topicsC.count || 0, subtopics: subtopicsC.count || 0 } })
   }
@@ -405,6 +411,23 @@ function CommandCenter() {
               </div>
             ))}
           </div>
+        </Card>
+      )}
+      {d.editingData && d.editingData.length > 0 && (
+        <Card title="Editing completion by subject" size="small" style={{ marginBottom: 16 }}
+          extra={<span style={{ display: 'inline-flex', gap: 14, fontSize: 12, color: '#69707d' }}>
+            <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#2563eb', marginRight: 5 }} />Editing completed</span>
+            <span><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: '#22c55e', marginRight: 5 }} />Output completed</span>
+          </span>}>
+          <ResponsiveContainer width="100%" height={Math.max(200, d.editingData.length * 44)}>
+            <BarChart data={d.editingData} layout="vertical" margin={{ left: 20, right: 44 }}>
+              <XAxis type="number" allowDecimals={false} />
+              <YAxis type="category" dataKey="name" width={150} tick={{ fontSize: 12 }} />
+              <Tooltip />
+              <Bar dataKey="Editing completed" fill="#2563eb" radius={[0, 4, 4, 0]} isAnimationActive={false}><LabelList dataKey="Editing completed" position="right" style={{ fontSize: 11, fill: '#69707d' }} /></Bar>
+              <Bar dataKey="Output completed" fill="#22c55e" radius={[0, 4, 4, 0]} isAnimationActive={false}><LabelList dataKey="Output completed" position="right" style={{ fontSize: 11, fill: '#69707d' }} /></Bar>
+            </BarChart>
+          </ResponsiveContainer>
         </Card>
       )}
       <Row gutter={[16, 16]}>
@@ -1615,6 +1638,7 @@ function useEditingQueue() {
   const [items, setItems] = useState<any>(null)
   const [edits, setEdits] = useState<any>({})
   const [editors, setEditors] = useState<any[]>([])
+  const [shootDates, setShootDates] = useState<any>({}) // content_item_id -> shooting-completed date (YYYY-MM-DD)
   async function load() {
     const all = await fetchAllItems()
     // load people first so we can resolve the editor's name ourselves — NO PostgREST embed
@@ -1625,6 +1649,11 @@ function useEditingQueue() {
     setEditors(people.filter((x: any) => x.role === 'editor' && x.is_active))
     const e = await supabase.from('editing_task').select('content_item_id, final_output, editor_id')
     const m: any = {}; (e.data || []).forEach((x: any) => { m[x.content_item_id] = { fo: x.final_output || 'Pending', editorId: x.editor_id || null, editorName: x.editor_id ? (nameById[x.editor_id] || null) : null } }); setEdits(m)
+    // shooting-completed date per sub-topic (item_stage completed_on for the SHOOTING stage)
+    const ss = await supabase.from('stage').select('id').eq('code', 'SHOOTING').maybeSingle()
+    const sd: any = {}
+    if (ss.data?.id) { const is = await selectAll('item_stage', 'content_item_id, completed_on, stage_id, status'); (is || []).forEach((x: any) => { if (x.stage_id === ss.data.id && x.status === 'Completed' && x.content_item_id && x.completed_on) sd[x.content_item_id] = String(x.completed_on).slice(0, 10) }) }
+    setShootDates(sd)
     setItems(all)
   }
   useEffect(() => { if (person?.id) load() }, [person?.id])
@@ -1637,7 +1666,7 @@ function useEditingQueue() {
   // editors see ONLY the videos assigned to them; everyone else sees all
   const scoped = isEditor ? editable.filter((i: any) => edits[i.id]?.editorId === person?.id) : editable
   const pendingCount = scoped.filter((i: any) => !FO_DONE.includes(edits[i.id]?.fo || 'Pending')).length
-  return { person, isEditor, isAdmin, items, edits, editors, scoped, pendingCount, load }
+  return { person, isEditor, isAdmin, items, edits, editors, scoped, pendingCount, shootDates, load }
 }
 const FO_COLOR: any = { Pending: 'default', 'In Progress': 'blue', Reshoot: 'red', 'Editing completed': 'cyan', 'Output completed': 'green', Completed: 'green' }
 // the editor's single status — Final output (Pending · In Progress · Reshoot · Completed). Editable in the table.
@@ -1676,19 +1705,24 @@ function FinalOutputSelect({ id, value, editStageId, shootStageId, reviewStageId
 }
 // Content-style table — admins multi-select + bulk-assign an editor; editors are view-only + Capture details.
 function EditingTable({ q }: any) {
-  const { isAdmin, edits, editors, scoped, load } = q
+  const { isAdmin, edits, editors, scoped, load, shootDates = {}, person } = q
+  const isPH = (person?.email || '').toLowerCase() === PH_EMAIL // subject-level assign is Program-Head only
   const { message: msg } = AntApp.useApp()
   const [open, setOpen] = useState<any>(null)
   const [selKeys, setSelKeys] = useState<any[]>([])
   const [programF, setProgramF] = useState<any>(null); const [subjectF, setSubjectF] = useState<any>(null)
   const [chap, setChap] = useState<any>(null); const [topicF, setTopicF] = useState<any>(null)
   const [foF, setFoF] = useState<any>(null); const [assignedF, setAssignedF] = useState<any>(null)
+  const [shootF, setShootF] = useState<any>(null) // filter by shooting-completed date
+  const [asgSubj, setAsgSubj] = useState<any>(null); const [asgEditor, setAsgEditor] = useState<any>(null) // admin: assign a whole subject to an editor
   const base = scoped
-  const programs = [...new Set(base.map((i: any) => i.program))].filter(Boolean)
-  const subjects = [...new Set(base.filter((i: any) => !programF || i.program === programF).map((i: any) => i.subject))].filter(Boolean)
-  const chapters = [...new Set(base.filter((i: any) => (!programF || i.program === programF) && (!subjectF || i.subject === subjectF)).map((i: any) => i.chapter))].filter(Boolean)
-  const topics = [...new Set(base.filter((i: any) => (!programF || i.program === programF) && (!subjectF || i.subject === subjectF) && (!chap || i.chapter === chap)).map((i: any) => i.topic))].filter(Boolean)
-  const filtered = base.filter((i: any) => (!programF || i.program === programF) && (!subjectF || i.subject === subjectF) && (!chap || i.chapter === chap) && (!topicF || i.topic === topicF) && (!foF || (edits[i.id]?.fo || 'Pending') === foF) && (!assignedF || (assignedF === '__none__' ? !edits[i.id]?.editorId : edits[i.id]?.editorId === assignedF)))
+  // filter-option lists reflect the currently-selected editor, so picking an editor shows THEIR programs/subjects
+  const optBase = base.filter((i: any) => (!assignedF || (assignedF === '__none__' ? !edits[i.id]?.editorId : edits[i.id]?.editorId === assignedF)))
+  const programs = [...new Set(optBase.map((i: any) => i.program))].filter(Boolean)
+  const subjects = [...new Set(optBase.filter((i: any) => !programF || i.program === programF).map((i: any) => i.subject))].filter(Boolean)
+  const chapters = [...new Set(optBase.filter((i: any) => (!programF || i.program === programF) && (!subjectF || i.subject === subjectF)).map((i: any) => i.chapter))].filter(Boolean)
+  const topics = [...new Set(optBase.filter((i: any) => (!programF || i.program === programF) && (!subjectF || i.subject === subjectF) && (!chap || i.chapter === chap)).map((i: any) => i.topic))].filter(Boolean)
+  const filtered = base.filter((i: any) => (!programF || i.program === programF) && (!subjectF || i.subject === subjectF) && (!chap || i.chapter === chap) && (!topicF || i.topic === topicF) && (!foF || (edits[i.id]?.fo || 'Pending') === foF) && (!assignedF || (assignedF === '__none__' ? !edits[i.id]?.editorId : edits[i.id]?.editorId === assignedF)) && (!shootF?.[0] || !shootF?.[1] || (shootDates[i.id] && shootDates[i.id] >= shootF[0].format('YYYY-MM-DD') && shootDates[i.id] <= shootF[1].format('YYYY-MM-DD'))))
   async function assignEditor(editorId: any) {
     let ok = 0, fail = 0, lastErr = ''
     for (const id of selKeys) {
@@ -1702,19 +1736,43 @@ function EditingTable({ q }: any) {
     else msg.error(lastErr || 'Could not assign')
     setSelKeys([]); load()
   }
+  // admin: assign (or, with editorId=null, DESELECT) every sub-topic in a subject in one action
+  async function assignSubject(editorId: any) {
+    if (!asgSubj) return
+    const ids = base.filter((i: any) => i.subject === asgSubj).map((i: any) => i.id)
+    if (!ids.length) { msg.warning('No sub-topics in that subject.'); return }
+    let ok = 0, fail = 0, lastErr = ''
+    for (const id of ids) {
+      const { data, error } = await supabase.from('editing_task').upsert({ content_item_id: id, editor_id: editorId }, { onConflict: 'content_item_id' }).select('content_item_id')
+      if (error) { fail++; lastErr = error.message } else if (!data || !data.length) { fail++; lastErr = 'No write access (editing_task RLS).' } else ok++
+    }
+    if (ok) msg.success(`${editorId ? 'Assigned' : 'Unassigned'} ${ok} sub-topic(s) in “${asgSubj}”${fail ? ` · ${fail} failed` : ''}`)
+    else msg.error(lastErr || 'Could not assign')
+    setAsgSubj(null); load()
+  }
   const cols = [
     { title: 'Sub-topic', render: (_: any, r: any) => <div><div style={{ fontWeight: 600 }}>{r.name}</div><div style={{ fontSize: 11, color: '#9aa1ad' }}>{r.program} › {r.subject} › {r.chapter} › {r.topic}</div></div> },
+    { title: 'Shooting completed', width: 150, render: (_: any, r: any) => shootDates[r.id] ? <span style={{ fontSize: 12 }}>{dayjs(shootDates[r.id]).format('DD MMM YYYY')}</span> : <span style={{ color: '#9aa1ad' }}>—</span> },
     { title: 'Assigned editor', width: 160, render: (_: any, r: any) => edits[r.id]?.editorName ? <span><Avatar size={20} style={{ background: '#c2410c', marginRight: 6, fontSize: 11 }}>{(edits[r.id].editorName || '?')[0]}</Avatar>{edits[r.id].editorName}</span> : <Tag color="default">Unassigned</Tag> },
     { title: 'Final output', width: 170, render: (_: any, r: any) => <FinalOutputSelect id={r.id} value={edits[r.id]?.fo || 'Pending'} editStageId={r.byCode?.EDITING?.id} shootStageId={r.byCode?.SHOOTING?.id} reviewStageId={r.byCode?.SHOOT_REVIEW?.id} reload={load} /> },
     { title: '', width: 130, render: (_: any, r: any) => <Button size="small" onClick={() => setOpen(r)}>Capture details</Button> },
   ]
   return <Card styles={{ body: { padding: 16 } }}>
+    {isPH && <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f6fbf7', border: '1px solid #d7ecdb', borderRadius: 8, padding: '10px 12px', marginBottom: 14, flexWrap: 'wrap' }}>
+      <b style={{ fontSize: 13 }}>Assign a subject to an editor</b>
+      <Select placeholder="Subject" allowClear showSearch style={{ minWidth: 200 }} value={asgSubj} onChange={setAsgSubj} options={[...new Set(base.map((i: any) => i.subject))].filter(Boolean).sort().map((s: any) => ({ value: s, label: s }))} />
+      <Select placeholder="Editor" allowClear showSearch optionFilterProp="label" style={{ minWidth: 200 }} value={asgEditor} onChange={setAsgEditor} options={editors.map((e: any) => ({ value: e.id, label: e.full_name }))} />
+      <Button type="primary" size="small" disabled={!asgSubj || !asgEditor} onClick={() => assignSubject(asgEditor)}>Assign all in subject</Button>
+      <Popconfirm title={`Deselect subject "${asgSubj || ''}" from its editor?`} okText="Deselect" okButtonProps={{ danger: true }} onConfirm={() => assignSubject(null)}><Button size="small" danger disabled={!asgSubj}>Deselect subject</Button></Popconfirm>
+      {asgSubj ? <span style={{ fontSize: 12, color: '#69707d' }}>{base.filter((i: any) => i.subject === asgSubj).length} sub-topic(s)</span> : null}
+    </div>}
     <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
       <Select placeholder="Program" allowClear showSearch style={{ minWidth: 150 }} value={programF} onChange={(v) => { setProgramF(v); setSubjectF(null); setChap(null); setTopicF(null) }} options={programs.map((p: any) => ({ value: p, label: p }))} />
       <Select placeholder="Subject" allowClear showSearch disabled={!programF} style={{ minWidth: 150 }} value={subjectF} onChange={(v) => { setSubjectF(v); setChap(null); setTopicF(null) }} options={subjects.map((s: any) => ({ value: s, label: s }))} />
       <Select placeholder="Chapter" allowClear showSearch disabled={!subjectF} style={{ minWidth: 140 }} value={chap} onChange={(v) => { setChap(v); setTopicF(null) }} options={chapters.map((c: any) => ({ value: c, label: c }))} />
       <Select placeholder="Topic" allowClear showSearch disabled={!chap} style={{ minWidth: 140 }} value={topicF} onChange={setTopicF} options={topics.map((t: any) => ({ value: t, label: t }))} />
       <Select placeholder="Final output" allowClear style={{ minWidth: 130 }} value={foF} onChange={setFoF} options={FINAL_OUTPUT_OPTS.map(s => ({ value: s, label: s }))} />
+      <DatePicker.RangePicker placeholder={['Shooting from', 'to']} allowClear value={shootF} onChange={setShootF} format="DD MMM YYYY" />
       {isAdmin && <Select placeholder="Editor" allowClear showSearch style={{ minWidth: 150 }} value={assignedF} onChange={setAssignedF} options={[{ value: '__none__', label: 'Unassigned' }, ...editors.map((e: any) => ({ value: e.id, label: e.full_name }))]} />}
       <div style={{ marginLeft: 'auto', alignSelf: 'center', color: '#9aa1ad', fontSize: 12 }}>{filtered.length} shown</div>
     </div>
