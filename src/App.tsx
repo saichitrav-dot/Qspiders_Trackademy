@@ -1714,7 +1714,7 @@ function EditingTable({ q }: any) {
   const [chap, setChap] = useState<any>(null); const [topicF, setTopicF] = useState<any>(null)
   const [foF, setFoF] = useState<any>(null); const [assignedF, setAssignedF] = useState<any>(null)
   const [shootF, setShootF] = useState<any>(null) // filter by shooting-completed date
-  const [asgSubj, setAsgSubj] = useState<any>(null); const [asgEditor, setAsgEditor] = useState<any>(null) // admin: assign a whole subject to an editor
+  const [asgProg, setAsgProg] = useState<any>(null); const [asgSubj, setAsgSubj] = useState<any>(null); const [asgEditor, setAsgEditor] = useState<any>(null) // PH: assign a whole program/subject to an editor
   const base = scoped
   // filter-option lists reflect the currently-selected editor, so picking an editor shows THEIR programs/subjects
   const optBase = base.filter((i: any) => (!assignedF || (assignedF === '__none__' ? !edits[i.id]?.editorId : edits[i.id]?.editorId === assignedF)))
@@ -1736,19 +1736,21 @@ function EditingTable({ q }: any) {
     else msg.error(lastErr || 'Could not assign')
     setSelKeys([]); load()
   }
-  // admin: assign (or, with editorId=null, DESELECT) every sub-topic in a subject in one action
-  async function assignSubject(editorId: any) {
-    if (!asgSubj) return
-    const ids = base.filter((i: any) => i.subject === asgSubj).map((i: any) => i.id)
-    if (!ids.length) { msg.warning('No sub-topics in that subject.'); return }
+  // PH: assign (or, with editorId=null, DESELECT) every sub-topic in a PROGRAM (optionally narrowed to a
+  // subject) to one editor. Only shooting-completed sub-topics are in `base`, so those are what get assigned.
+  async function assignScope(editorId: any) {
+    if (!asgProg && !asgSubj) return
+    const ids = base.filter((i: any) => (!asgProg || i.program === asgProg) && (!asgSubj || i.subject === asgSubj)).map((i: any) => i.id)
+    if (!ids.length) { msg.warning('No shooting-completed sub-topics in that selection.'); return }
     let ok = 0, fail = 0, lastErr = ''
     for (const id of ids) {
       const { data, error } = await supabase.from('editing_task').upsert({ content_item_id: id, editor_id: editorId }, { onConflict: 'content_item_id' }).select('content_item_id')
       if (error) { fail++; lastErr = error.message } else if (!data || !data.length) { fail++; lastErr = 'No write access (editing_task RLS).' } else ok++
     }
-    if (ok) msg.success(`${editorId ? 'Assigned' : 'Unassigned'} ${ok} sub-topic(s) in “${asgSubj}”${fail ? ` · ${fail} failed` : ''}`)
+    const label = asgSubj || asgProg
+    if (ok) msg.success(`${editorId ? 'Assigned' : 'Unassigned'} ${ok} sub-topic(s) in “${label}”${fail ? ` · ${fail} failed` : ''}`)
     else msg.error(lastErr || 'Could not assign')
-    setAsgSubj(null); load()
+    setAsgProg(null); setAsgSubj(null); load()
   }
   const cols = [
     { title: 'Sub-topic', render: (_: any, r: any) => <div><div style={{ fontWeight: 600 }}>{r.name}</div><div style={{ fontSize: 11, color: '#9aa1ad' }}>{r.program} › {r.subject} › {r.chapter} › {r.topic}</div></div> },
@@ -1759,12 +1761,13 @@ function EditingTable({ q }: any) {
   ]
   return <Card styles={{ body: { padding: 16 } }}>
     {isPH && <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f6fbf7', border: '1px solid #d7ecdb', borderRadius: 8, padding: '10px 12px', marginBottom: 14, flexWrap: 'wrap' }}>
-      <b style={{ fontSize: 13 }}>Assign a subject to an editor</b>
-      <Select placeholder="Subject" allowClear showSearch style={{ minWidth: 200 }} value={asgSubj} onChange={setAsgSubj} options={[...new Set(base.map((i: any) => i.subject))].filter(Boolean).sort().map((s: any) => ({ value: s, label: s }))} />
-      <Select placeholder="Editor" allowClear showSearch optionFilterProp="label" style={{ minWidth: 200 }} value={asgEditor} onChange={setAsgEditor} options={editors.map((e: any) => ({ value: e.id, label: e.full_name }))} />
-      <Button type="primary" size="small" disabled={!asgSubj || !asgEditor} onClick={() => assignSubject(asgEditor)}>Assign all in subject</Button>
-      <Popconfirm title={`Deselect subject "${asgSubj || ''}" from its editor?`} okText="Deselect" okButtonProps={{ danger: true }} onConfirm={() => assignSubject(null)}><Button size="small" danger disabled={!asgSubj}>Deselect subject</Button></Popconfirm>
-      {asgSubj ? <span style={{ fontSize: 12, color: '#69707d' }}>{base.filter((i: any) => i.subject === asgSubj).length} sub-topic(s)</span> : null}
+      <b style={{ fontSize: 13 }}>Assign a program to an editor</b>
+      <Select placeholder="Program" allowClear showSearch style={{ minWidth: 180 }} value={asgProg} onChange={(v) => { setAsgProg(v); setAsgSubj(null) }} options={[...new Set(base.map((i: any) => i.program))].filter(Boolean).sort().map((s: any) => ({ value: s, label: s }))} />
+      <Select placeholder="Subject (optional)" allowClear showSearch style={{ minWidth: 170 }} value={asgSubj} onChange={setAsgSubj} options={[...new Set(base.filter((i: any) => !asgProg || i.program === asgProg).map((i: any) => i.subject))].filter(Boolean).sort().map((s: any) => ({ value: s, label: s }))} />
+      <Select placeholder="Editor" allowClear showSearch optionFilterProp="label" style={{ minWidth: 180 }} value={asgEditor} onChange={setAsgEditor} options={editors.map((e: any) => ({ value: e.id, label: e.full_name }))} />
+      <Button type="primary" size="small" disabled={(!asgProg && !asgSubj) || !asgEditor} onClick={() => assignScope(asgEditor)}>Assign all</Button>
+      <Popconfirm title={`Deselect "${asgSubj || asgProg || ''}" from its editor?`} okText="Deselect" okButtonProps={{ danger: true }} onConfirm={() => assignScope(null)}><Button size="small" danger disabled={!asgProg && !asgSubj}>Deselect</Button></Popconfirm>
+      {(asgProg || asgSubj) ? <span style={{ fontSize: 12, color: '#69707d' }}>{base.filter((i: any) => (!asgProg || i.program === asgProg) && (!asgSubj || i.subject === asgSubj)).length} sub-topic(s)</span> : null}
     </div>}
     <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
       <Select placeholder="Program" allowClear showSearch style={{ minWidth: 150 }} value={programF} onChange={(v) => { setProgramF(v); setSubjectF(null); setChap(null); setTopicF(null) }} options={programs.map((p: any) => ({ value: p, label: p }))} />
@@ -3994,7 +3997,7 @@ function WeeklyGoals() {
       {!missing && allItems.length > 0 && (
         <Card title={kind === 'editing' ? "Editors Performance — this week's goal" : "Trainer performance — this week's goal"} size="small" style={{ marginBottom: 16 }}
           extra={<span style={{ fontSize: 12, color: '#9aa1ad' }}>{kind === 'editing' ? 'Which editor is assigned and how many they have edited' : "Who owns the target sub-topics and how many they've recorded"}</span>}>
-          <Table rowKey="name" size="small" pagination={false} dataSource={trainerPerf}
+          <Table rowKey="name" size="small" pagination={false} dataSource={kind === 'editing' ? trainerPerf.filter((e: any) => !e.unassigned) : trainerPerf}
             columns={[
               { title: 'Sl No', width: 70, render: (_: any, __: any, i: number) => <span style={{ color: '#9aa1ad' }}>{i + 1}</span> },
               { title: kind === 'editing' ? 'Editor' : 'Trainer', render: (_: any, e: any) => e.unassigned ? <span style={{ color: '#9aa1ad' }}>Unassigned</span> : <span><Avatar size={22} style={{ background: '#c2410c', marginRight: 8, fontSize: 11 }}>{(e.name || '?')[0]}</Avatar>{e.name}{!e.unassigned && e.achieved === maxAch && maxAch > 0 ? <Tag color="orange" style={{ marginLeft: 8 }}>★ Top</Tag> : null}</span> },
