@@ -1647,8 +1647,10 @@ function useEditingQueue() {
     const people = p.data || []
     const nameById: any = {}; people.forEach((x: any) => { nameById[x.id] = x.full_name })
     setEditors(people.filter((x: any) => x.role === 'editor' && x.is_active))
-    const e = await supabase.from('editing_task').select('content_item_id, final_output, editor_id')
-    const m: any = {}; (e.data || []).forEach((x: any) => { m[x.content_item_id] = { fo: x.final_output || 'Pending', editorId: x.editor_id || null, editorName: x.editor_id ? (nameById[x.editor_id] || null) : null } }); setEdits(m)
+    // selectAll pages past PostgREST's 1000-row cap — a plain select silently truncated the map once
+    // editing_task grew past 1000 rows, so assignments (editor_id / final_output) beyond that vanished from the UI.
+    const e = await selectAll('editing_task', 'content_item_id, final_output, editor_id')
+    const m: any = {}; (e || []).forEach((x: any) => { m[x.content_item_id] = { fo: x.final_output || 'Pending', editorId: x.editor_id || null, editorName: x.editor_id ? (nameById[x.editor_id] || null) : null } }); setEdits(m)
     // shooting-completed date per sub-topic (item_stage completed_on for the SHOOTING stage)
     const ss = await supabase.from('stage').select('id').eq('code', 'SHOOTING').maybeSingle()
     const sd: any = {}
@@ -1714,6 +1716,7 @@ function EditingTable({ q }: any) {
   const [chap, setChap] = useState<any>(null); const [topicF, setTopicF] = useState<any>(null)
   const [foF, setFoF] = useState<any>(null); const [assignedF, setAssignedF] = useState<any>(null)
   const [shootF, setShootF] = useState<any>(null) // filter by shooting-completed date
+  const [showEditors, setShowEditors] = useState(false) // editor workload panel
   const [asgProg, setAsgProg] = useState<any>(null); const [asgSubj, setAsgSubj] = useState<any>(null); const [asgEditor, setAsgEditor] = useState<any>(null) // PH: assign a whole program/subject to an editor
   const base = scoped
   // filter-option lists reflect the currently-selected editor, so picking an editor shows THEIR programs/subjects
@@ -1723,6 +1726,21 @@ function EditingTable({ q }: any) {
   const chapters = [...new Set(optBase.filter((i: any) => (!programF || i.program === programF) && (!subjectF || i.subject === subjectF)).map((i: any) => i.chapter))].filter(Boolean)
   const topics = [...new Set(optBase.filter((i: any) => (!programF || i.program === programF) && (!subjectF || i.subject === subjectF) && (!chap || i.chapter === chap)).map((i: any) => i.topic))].filter(Boolean)
   const filtered = base.filter((i: any) => (!programF || i.program === programF) && (!subjectF || i.subject === subjectF) && (!chap || i.chapter === chap) && (!topicF || i.topic === topicF) && (!foF || (edits[i.id]?.fo || 'Pending') === foF) && (!assignedF || (assignedF === '__none__' ? !edits[i.id]?.editorId : edits[i.id]?.editorId === assignedF)) && (!shootF?.[0] || !shootF?.[1] || (shootDates[i.id] && shootDates[i.id] >= shootF[0].format('YYYY-MM-DD') && shootDates[i.id] <= shootF[1].format('YYYY-MM-DD'))))
+  // per-editor workload + progress across ALL editable videos (not just the current filter)
+  const byEditor: any = {}
+  editors.forEach((e: any) => { byEditor[e.id] = { key: e.id, name: e.full_name, assigned: 0, Pending: 0, 'In Progress': 0, Reshoot: 0, 'Editing completed': 0, 'Output completed': 0 } })
+  scoped.forEach((i: any) => { const eid = edits[i.id]?.editorId; if (!eid || !byEditor[eid]) return; const s = byEditor[eid]; s.assigned++; const fo = edits[i.id]?.fo || 'Pending'; if (s[fo] !== undefined) s[fo]++; else s.Pending++ })
+  const editorRows = (Object.values(byEditor) as any[]).filter((s: any) => s.assigned > 0).sort((a: any, b: any) => b.assigned - a.assigned)
+  const editorCols = [
+    { title: 'Editor', dataIndex: 'name', render: (v: string) => <span><Avatar size={20} style={{ background: '#c2410c', marginRight: 6, fontSize: 11 }}>{(v || '?')[0]}</Avatar><b>{v}</b></span> },
+    { title: 'Assigned', dataIndex: 'assigned', width: 90 },
+    { title: 'Pending', dataIndex: 'Pending', width: 90, render: (v: number) => v ? <Tag>{v}</Tag> : <span style={{ color: '#9aa1ad' }}>0</span> },
+    { title: 'In progress', dataIndex: 'In Progress', width: 100, render: (v: number) => v ? <Tag color="blue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>0</span> },
+    { title: 'Reshoot', dataIndex: 'Reshoot', width: 90, render: (v: number) => v ? <Tag color="red">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>0</span> },
+    { title: 'Editing done', dataIndex: 'Editing completed', width: 110, render: (v: number) => v ? <Tag color="cyan">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>0</span> },
+    { title: 'Output done', dataIndex: 'Output completed', width: 110, render: (v: number) => v ? <Tag color="green">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>0</span> },
+    { title: 'Progress', width: 170, render: (_: any, r: any) => { const done = r['Editing completed'] + r['Output completed']; const pct = r.assigned ? Math.round(done / r.assigned * 100) : 0; return <Progress percent={pct} size="small" strokeColor={pct === 100 ? '#16a34a' : PRIMARY} /> } },
+  ]
   async function assignEditor(editorId: any) {
     let ok = 0, fail = 0, lastErr = ''
     for (const id of selKeys) {
@@ -1777,8 +1795,12 @@ function EditingTable({ q }: any) {
       <Select placeholder="Final output" allowClear style={{ minWidth: 130 }} value={foF} onChange={setFoF} options={FINAL_OUTPUT_OPTS.map(s => ({ value: s, label: s }))} />
       <DatePicker.RangePicker placeholder={['Shooting from', 'to']} allowClear value={shootF} onChange={setShootF} format="DD MMM YYYY" />
       {isAdmin && <Select placeholder="Editor" allowClear showSearch style={{ minWidth: 150 }} value={assignedF} onChange={setAssignedF} options={[{ value: '__none__', label: 'Unassigned' }, ...editors.map((e: any) => ({ value: e.id, label: e.full_name }))]} />}
+      {isAdmin && <Button size="small" type={showEditors ? 'primary' : 'default'} onClick={() => setShowEditors((v) => !v)}>Editor workload</Button>}
       <div style={{ marginLeft: 'auto', alignSelf: 'center', color: '#9aa1ad', fontSize: 12 }}>{filtered.length} shown</div>
     </div>
+    {isAdmin && showEditors && <Card size="small" title="Editors — assignments & progress" style={{ marginBottom: 14 }} extra={<span style={{ fontSize: 11, color: '#9aa1ad' }}>{editorRows.length} editor(s) with assigned videos</span>}>
+      <Table size="small" rowKey="key" pagination={false} columns={editorCols as any} dataSource={editorRows} scroll={{ x: 'max-content' }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No editors have assigned videos yet" /> }} />
+    </Card>}
     {isAdmin && selKeys.length > 0 && (
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#eef0ff', border: '1px solid #d9defb', borderRadius: 8, padding: '8px 12px', marginBottom: 12, flexWrap: 'wrap' }}>
         <b>{selKeys.length} selected</b>
