@@ -1728,11 +1728,12 @@ function EditingTable({ q }: any) {
   const filtered = base.filter((i: any) => (!programF || i.program === programF) && (!subjectF || i.subject === subjectF) && (!chap || i.chapter === chap) && (!topicF || i.topic === topicF) && (!foF || (edits[i.id]?.fo || 'Pending') === foF) && (!assignedF || (assignedF === '__none__' ? !edits[i.id]?.editorId : edits[i.id]?.editorId === assignedF)) && (!shootF?.[0] || !shootF?.[1] || (shootDates[i.id] && shootDates[i.id] >= shootF[0].format('YYYY-MM-DD') && shootDates[i.id] <= shootF[1].format('YYYY-MM-DD'))))
   // per-editor workload + progress across ALL editable videos (not just the current filter)
   const byEditor: any = {}
-  editors.forEach((e: any) => { byEditor[e.id] = { key: e.id, name: e.full_name, assigned: 0, Pending: 0, 'In Progress': 0, Reshoot: 0, 'Editing completed': 0, 'Output completed': 0 } })
-  scoped.forEach((i: any) => { const eid = edits[i.id]?.editorId; if (!eid || !byEditor[eid]) return; const s = byEditor[eid]; s.assigned++; const fo = edits[i.id]?.fo || 'Pending'; if (s[fo] !== undefined) s[fo]++; else s.Pending++ })
+  editors.forEach((e: any) => { byEditor[e.id] = { key: e.id, name: e.full_name, assigned: 0, Pending: 0, 'In Progress': 0, Reshoot: 0, 'Editing completed': 0, 'Output completed': 0, subjects: new Set() } })
+  scoped.forEach((i: any) => { const eid = edits[i.id]?.editorId; if (!eid || !byEditor[eid]) return; const s = byEditor[eid]; s.assigned++; if (i.subject) s.subjects.add(i.subject); const fo = edits[i.id]?.fo || 'Pending'; if (s[fo] !== undefined) s[fo]++; else s.Pending++ })
   const editorRows = (Object.values(byEditor) as any[]).filter((s: any) => s.assigned > 0).sort((a: any, b: any) => b.assigned - a.assigned)
   const editorCols = [
     { title: 'Editor', dataIndex: 'name', render: (v: string) => <span><Avatar size={20} style={{ background: '#c2410c', marginRight: 6, fontSize: 11 }}>{(v || '?')[0]}</Avatar><b>{v}</b></span> },
+    { title: 'Subjects', width: 220, render: (_: any, r: any) => { const ss = [...r.subjects].sort(); return ss.length ? <span style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>{ss.map((s: any) => <Tag key={s} color="geekblue" style={{ margin: 0 }}>{s}</Tag>)}</span> : <span style={{ color: '#9aa1ad' }}>—</span> } },
     { title: 'Assigned', dataIndex: 'assigned', width: 90 },
     { title: 'Pending', dataIndex: 'Pending', width: 90, render: (v: number) => v ? <Tag>{v}</Tag> : <span style={{ color: '#9aa1ad' }}>0</span> },
     { title: 'In progress', dataIndex: 'In Progress', width: 100, render: (v: number) => v ? <Tag color="blue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>0</span> },
