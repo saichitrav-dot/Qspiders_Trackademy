@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx'
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ConfigProvider, Layout, Menu, Card, Progress, Table, Tag, Drawer, Select, Button,
-  Avatar, Spin, Input, Row, Col, Empty, Modal, Form, DatePicker, message, Segmented, InputNumber, Statistic, Checkbox, Popconfirm, Popover, AutoComplete, Switch, Breadcrumb, Slider, Tabs, Tree, Timeline, Tooltip as ATooltip, App as AntApp,
+  Avatar, Spin, Input, Row, Col, Empty, Modal, Form, DatePicker, message, Segmented, InputNumber, Statistic, Checkbox, Popconfirm, Popover, AutoComplete, Switch, Breadcrumb, Slider, Tabs, Tree, Timeline, Alert, Tooltip as ATooltip, App as AntApp,
 } from 'antd'
 import {
   DashboardOutlined, ApartmentOutlined, CalendarOutlined, BellOutlined, SearchOutlined,
@@ -324,6 +324,86 @@ function KpiCard({ icon, tint, label, value, onClick }: any) {
 function LiveTile({ color, label, value, onClick }: any) {
   return <Card hoverable={!!onClick} onClick={onClick} styles={{ body: { padding: 16 } }}><div style={{ fontSize: 11, color: '#69707d', fontWeight: 600, textTransform: 'uppercase', letterSpacing: .3 }}>{label}</div><div style={{ fontSize: 26, fontWeight: 800, marginTop: 6, color }}>{value}</div></Card>
 }
+// PROGRAM-HEAD alert: shows which Program / Subject / Lead has NOT logged today's mentor ratings, or
+// "Ratings are up to date" when every one has. This app is a static SPA on Supabase (no mail server),
+// so the "notification" is an in-app banner the PH sees on their home. A Program/Subject/Lead is
+// "pending" when it has an active, in-training mentor with no mentor_rating dated today.
+function RatingComplianceAlert() {
+  const nav = useNavigate()
+  const [d, setD] = useState<any>(null)
+  async function load() {
+    const today = dayjs().format('YYYY-MM-DD')
+    const ppl = await selectAll('person', 'id, full_name, role, is_active, lead_id, program_id, mentor_status')
+    const nameById: any = {}; ppl.forEach((p: any) => nameById[p.id] = p.full_name)
+    const ms = await supabase.from('main_subject').select('id, name')
+    const progName: any = {}; (ms.data || []).forEach((m: any) => progName[m.id] = m.name)
+    // multiple managing leads (v28); fall back to person.lead_id when absent
+    const ml = await supabase.from('mentor_lead').select('mentor_id, lead_id')
+    const leadsOf: any = {}; if (!ml.error) (ml.data || []).forEach((x: any) => { (leadsOf[x.mentor_id] = leadsOf[x.mentor_id] || []).push(x.lead_id) })
+    // deployed mentors don't need a daily rating — exclude them (as do terminated / dropout)
+    const dp = await selectAll('mentor_deployment', 'mentor_id, status')
+    const deployed = new Set((dp || []).filter((x: any) => x.status === 'approved').map((x: any) => x.mentor_id))
+    // who was rated TODAY
+    const rt = await supabase.from('mentor_rating').select('mentor_id, rated_on').eq('rated_on', today)
+    const ratedToday = new Set<string>((rt.data || []).map((x: any) => x.mentor_id))
+    // topic / sub-topic -> { program, subject } so a mentor's subjects come from their assigned prep
+    const tp = await selectAll('topic', 'id, chapter:chapter_id(subject:subject_id(name, main_subject:main_subject_id(name)))')
+    const topicMap: any = {}; tp.forEach((t: any) => topicMap[t.id] = { program: t.chapter?.subject?.main_subject?.name || '—', subject: t.chapter?.subject?.name || '—' })
+    const stp = await selectAll('subtopic', 'id, topic:topic_id(chapter:chapter_id(subject:subject_id(name, main_subject:main_subject_id(name))))')
+    stp.forEach((st: any) => topicMap[st.id] = { program: st.topic?.chapter?.subject?.main_subject?.name || '—', subject: st.topic?.chapter?.subject?.name || '—' })
+    const mentors = ppl.filter((p: any) => p.role === 'mentor' && p.is_active && !deployed.has(p.id) && !['terminated', 'dropout'].includes(p.mentor_status))
+    const mset = new Set(mentors.map((m: any) => m.id))
+    const prep = await selectAll('mentor_prep', 'mentor_id, topic_id, state')
+    const pairsByMentor: any = {}
+    prep.forEach((p: any) => {
+      if (!mset.has(p.mentor_id) || (p.state || 'active') === 'withdrawn') return
+      const t = topicMap[p.topic_id]; if (!t || !t.subject || t.subject === '—') return
+      const arr = pairsByMentor[p.mentor_id] = pairsByMentor[p.mentor_id] || []
+      if (!arr.some((x: any) => x.program === t.program && x.subject === t.subject)) arr.push({ program: t.program, subject: t.subject })
+    })
+    // aggregate to SUBJECT level (one row per program › subject, no duplicates); merge the leads who
+    // are behind and count how many of that subject's mentors have no rating today
+    const agg: any = {}
+    mentors.forEach((m: any) => {
+      const lids = leadsOf[m.id]?.length ? leadsOf[m.id] : (m.lead_id ? [m.lead_id] : [])
+      const leadNames = lids.map((l: string) => nameById[l]).filter(Boolean)
+      let pairs = pairsByMentor[m.id]
+      if (!pairs || !pairs.length) pairs = [{ program: progName[m.program_id] || '—', subject: '—' }]
+      const rated = ratedToday.has(m.id)
+      pairs.forEach((pr: any) => {
+        const k = pr.program + '||' + pr.subject
+        const e = agg[k] || (agg[k] = { key: k, program: pr.program, subject: pr.subject, leads: new Set<string>(), total: 0, unrated: 0 })
+        e.total++
+        if (!rated) { e.unrated++; (leadNames.length ? leadNames : ['— (no lead)']).forEach((l: string) => e.leads.add(l)) }
+      })
+    })
+    const behind = (Object.values(agg) as any[]).filter((e) => e.unrated > 0)
+      .map((e) => ({ ...e, lead: [...e.leads].sort().join(', ') }))
+      .sort((a, b) => b.unrated - a.unrated || String(a.subject).localeCompare(String(b.subject)))
+    setD({ today, totalMentors: mentors.length, behind })
+  }
+  useEffect(() => { load() }, [])
+  if (!d || !d.totalMentors) return null
+  if (!d.behind.length) return (
+    <Alert type="success" showIcon style={{ marginBottom: 16 }}
+      message={<b>Ratings are up to date — every active mentor has been rated today ({dayjs(d.today).format('DD MMM YYYY')}) ✓</b>} />
+  )
+  const cols = [
+    { title: 'Program', dataIndex: 'program', width: 170, render: (v: string) => v && v !== '—' ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: 'Subject', dataIndex: 'subject', width: 180, render: (v: string) => v && v !== '—' ? v : <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: 'Lead', dataIndex: 'lead', render: (v: string) => v.startsWith('—') ? <span style={{ color: '#dc2626' }}>{v}</span> : v },
+    { title: 'Not rated today', dataIndex: 'unrated', width: 140, align: 'center' as const, render: (v: number, r: any) => <Tag color="volcano">{v} of {r.total}</Tag> },
+  ]
+  return (
+    <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+      message={<b>Ratings pending for today ({dayjs(d.today).format('DD MMM YYYY')}) — {d.behind.length} subject{d.behind.length === 1 ? '' : 's'} not updated</b>}
+      description={<div>
+        <Table size="small" rowKey="key" style={{ marginTop: 8 }} columns={cols as any} dataSource={d.behind} pagination={d.behind.length > 8 ? { pageSize: 8 } : false} />
+        <Button size="small" type="link" style={{ paddingLeft: 0, marginTop: 6 }} onClick={() => nav('/mentor')}>Go to Mentor Management →</Button>
+      </div>} />
+  )
+}
+
 function CommandCenter() {
   const { person, seesAll } = useAuth()
   const nav = useNavigate()
@@ -389,6 +469,7 @@ function CommandCenter() {
     <div>
       <PageHead title="Program Command Center" sub={d.scoped ? 'Your assigned work' : `${d.treeTotals?.programs ?? d.programCount} program${(d.treeTotals?.programs ?? d.programCount) === 1 ? '' : 's'}`} />
       <Tabs defaultActiveKey="overview" items={[{ key: 'overview', label: 'Overview', children: <>
+      {!d.scoped && <RatingComplianceAlert />}
       {!d.scoped && d.treeTotals && (
         <Card style={{ marginBottom: 16 }} styles={{ body: { padding: 16 } }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
@@ -3640,6 +3721,7 @@ function Reviews() {
   const [foMap, setFoMap] = useState<any>({})           // content_item_id -> editor's final_output status
   const [programF, setProgramF] = useState<any>(null); const [subjectF, setSubjectF] = useState<any>(null)
   const [chap, setChap] = useState<any>(null); const [topicF, setTopicF] = useState<any>(null)
+  const [selKeys, setSelKeys] = useState<any[]>([]); const [bulkBusy, setBulkBusy] = useState(false) // bulk approve
   async function load() {
     const all = await fetchAllItems()
     setItems(all)
@@ -3662,12 +3744,24 @@ function Reviews() {
   }
   useEffect(() => { load() }, [])
   // Approve → mark the review complete so the sub-topic becomes Published.
+  async function approveOne(r: any) {
+    if (r.byCode.SHOOT_REVIEW?.id) await setItemStage(r.byCode.SHOOT_REVIEW.id, 'Completed')
+    if (r.byCode.FINAL_REVIEW?.id) await setItemStage(r.byCode.FINAL_REVIEW.id, 'Completed')
+  }
   async function approve(r: any) {
-    try {
-      if (r.byCode.SHOOT_REVIEW?.id) await setItemStage(r.byCode.SHOOT_REVIEW.id, 'Completed')
-      if (r.byCode.FINAL_REVIEW?.id) await setItemStage(r.byCode.FINAL_REVIEW.id, 'Completed')
-      msg.success('Approved → Published ✓'); load()
-    } catch (e: any) { msg.error(e.message) }
+    try { await approveOne(r); msg.success('Approved → Published ✓'); load() }
+    catch (e: any) { msg.error(e.message) }
+  }
+  // Bulk approve every selected sub-topic (e.g. all of one Subject), reloading once at the end.
+  async function approveSelected(rows: any[]) {
+    if (!rows.length) return
+    setBulkBusy(true)
+    let ok = 0; const fails: string[] = []
+    for (const r of rows) { try { await approveOne(r); ok++ } catch (e: any) { fails.push(e?.message || 'error') } }
+    setBulkBusy(false); setSelKeys([])
+    if (ok) msg.success(`Approved ${ok} sub-topic${ok === 1 ? '' : 's'} → Published ✓`)
+    if (fails.length) msg.error(`${fails.length} could not be approved${ok ? '' : ` — ${fails[0]}`}`)
+    load()
   }
   // Reject → send it back to the trainer to re-record (Shooting reopens, Editing resets).
   async function reject(r: any) {
@@ -3705,13 +3799,27 @@ function Reviews() {
     <PageHead title="Reviews & Approvals" sub="One review after editing — Approve to publish, Reject sends it back to the trainer" />
     <Card styles={{ body: { padding: 16 } }}>
       <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-        <Select placeholder="Program" allowClear showSearch style={{ minWidth: 150 }} value={programF} onChange={(v) => { setProgramF(v); setSubjectF(null); setChap(null); setTopicF(null) }} options={programs.map((p: any) => ({ value: p, label: p }))} />
-        <Select placeholder="Subject" allowClear showSearch disabled={!programF} style={{ minWidth: 150 }} value={subjectF} onChange={(v) => { setSubjectF(v); setChap(null); setTopicF(null) }} options={subjects.map((s: any) => ({ value: s, label: s }))} />
-        <Select placeholder="Chapter" allowClear showSearch disabled={!subjectF} style={{ minWidth: 140 }} value={chap} onChange={(v) => { setChap(v); setTopicF(null) }} options={chapters.map((c: any) => ({ value: c, label: c }))} />
-        <Select placeholder="Topic" allowClear showSearch disabled={!chap} style={{ minWidth: 140 }} value={topicF} onChange={setTopicF} options={topics.map((t: any) => ({ value: t, label: t }))} />
+        <Select placeholder="Program" allowClear showSearch style={{ minWidth: 150 }} value={programF} onChange={(v) => { setProgramF(v); setSubjectF(null); setChap(null); setTopicF(null); setSelKeys([]) }} options={programs.map((p: any) => ({ value: p, label: p }))} />
+        <Select placeholder="Subject" allowClear showSearch disabled={!programF} style={{ minWidth: 150 }} value={subjectF} onChange={(v) => { setSubjectF(v); setChap(null); setTopicF(null); setSelKeys([]) }} options={subjects.map((s: any) => ({ value: s, label: s }))} />
+        <Select placeholder="Chapter" allowClear showSearch disabled={!subjectF} style={{ minWidth: 140 }} value={chap} onChange={(v) => { setChap(v); setTopicF(null); setSelKeys([]) }} options={chapters.map((c: any) => ({ value: c, label: c }))} />
+        <Select placeholder="Topic" allowClear showSearch disabled={!chap} style={{ minWidth: 140 }} value={topicF} onChange={(v) => { setTopicF(v); setSelKeys([]) }} options={topics.map((t: any) => ({ value: t, label: t }))} />
         <div style={{ marginLeft: 'auto', alignSelf: 'center', color: '#9aa1ad', fontSize: 12 }}>{queue.length} shown</div>
       </div>
-      <Table columns={cols as any} dataSource={queue.map((r: any) => ({ ...r, key: r.id }))} pagination={{ pageSize: 12 }} locale={{ emptyText: <Empty description="Nothing waiting for review" /> }} />
+      {queue.length > 0 && (() => {
+        const selectedRows = queue.filter((r: any) => selKeys.includes(r.id))
+        const allSelected = selectedRows.length === queue.length
+        return <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, padding: '8px 12px', background: selKeys.length ? '#f6ffed' : '#f7f8fb', border: `1px solid ${selKeys.length ? '#b7eb8f' : '#eef0f3'}`, borderRadius: 8, flexWrap: 'wrap' }}>
+          <Checkbox checked={allSelected} indeterminate={selectedRows.length > 0 && !allSelected} onChange={e => setSelKeys(e.target.checked ? queue.map((r: any) => r.id) : [])}>
+            Select all{subjectF ? ` in ${subjectF}` : topicF ? ` in ${topicF}` : ' shown'} ({queue.length})
+          </Checkbox>
+          <span style={{ color: '#9aa1ad', fontSize: 12 }}>{selKeys.length} selected</span>
+          <Popconfirm title={`Approve ${selectedRows.length} sub-topic${selectedRows.length === 1 ? '' : 's'}?`} description="Each one is published and leaves the queue." okText="Approve all" cancelText="Cancel" disabled={!selectedRows.length} onConfirm={() => approveSelected(selectedRows)}>
+            <Button type="primary" size="small" disabled={!selectedRows.length} loading={bulkBusy}>Approve selected</Button>
+          </Popconfirm>
+          {selKeys.length > 0 && <Button size="small" type="text" onClick={() => setSelKeys([])}>Clear</Button>}
+        </div>
+      })()}
+      <Table rowSelection={{ selectedRowKeys: selKeys, onChange: (keys: any[]) => setSelKeys(keys), preserveSelectedRowKeys: true } as any} columns={cols as any} dataSource={queue.map((r: any) => ({ ...r, key: r.id }))} pagination={{ pageSize: 12 }} locale={{ emptyText: <Empty description="Nothing waiting for review" /> }} />
     </Card>
   </div>
 }
@@ -4833,18 +4941,32 @@ function InfoDot({ text }: { text: string }) {
 }
 const RISK_INFO = 'Early-warning score 0–100, weighted: rating level 30% · rating trend 20% · prep stall 20% · weak mock/technical 15% · send-backs 10% · rating staleness 5%.  0–30 on track · 30–60 watch · 60+ at risk.'
 
+// editable rank input — local state, saves on blur / Enter (so typing "12" is one write, not two)
+function RankCell({ value, onSave }: { value: number | null; onSave: (v: number | null) => void }) {
+  const [v, setV] = useState<number | null>(value)
+  useEffect(() => { setV(value) }, [value])
+  const commit = () => { const nv = (v === undefined ? null : v); if (nv !== value) onSave(nv as any) }
+  return <InputNumber size="small" min={1} max={999} precision={0} controls={false} placeholder="—" value={v as any}
+    style={{ width: 60 }} onChange={(val) => setV(val as any)} onBlur={commit} onPressEnter={commit} />
+}
+
 // ===================== mentor analytics (Management → Tab 2) =====================
 function MentorAnalytics() {
+  const { message: msg } = AntApp.useApp()
   const { person } = useAuth()
   const isAdmin = person?.role === 'admin'
+  const canRank = isAdmin || person?.role === 'manager' || person?.role === 'team_lead' // Leads set rank by hand
   const [d, setD] = useState<any>(null)
   const [histQ, setHistQ] = useState('')
+  const [histProg, setHistProg] = useState<string | null>(null)  // Rating history → filter by program
   const [histSubj, setHistSubj] = useState<string | null>(null)  // Rating history → filter by subject
+  const [histStatus, setHistStatus] = useState<string | null>(null)  // Rating history → filter by lifecycle status
   const [histBand, setHistBand] = useState<string | null>(null)  // Rating history → filter by rating band
   async function load() {
-    let p: any = await supabase.from('person').select('id, full_name, role, is_active, lead_id, program_id, mentor_status')
-    if (p.error) p = await supabase.from('person').select('id, full_name, role, is_active, lead_id, program_id')
-    const people: any[] = p.data || []
+    // selectAll pages past the 1000-row cap — a plain select dropped mentors (and their ratings) once headcount passed 1000
+    let people: any[] = await selectAll('person', 'id, full_name, role, is_active, lead_id, program_id, mentor_status, rank')
+    if (!people.length) people = await selectAll('person', 'id, full_name, role, is_active, lead_id, program_id, mentor_status')
+    if (!people.length) people = await selectAll('person', 'id, full_name, role, is_active, lead_id, program_id')
     const nameById: any = {}; people.forEach((x: any) => nameById[x.id] = x.full_name)
     const allMentors = people.filter((x: any) => x.role === 'mentor' && x.is_active)
     const coPrograms = await coAssignedPrograms(person.id) // co-assigned programs (v29) widen a lead's mentor view
@@ -4855,21 +4977,22 @@ function MentorAnalytics() {
     const leadsOf = (m: any) => (lm[m.id]?.length ? lm[m.id] : (m.lead_id ? [m.lead_id] : []))
     const visMentors = isAdmin ? allMentors : allMentors.filter((m: any) => leadsOf(m).includes(person.id) || (m.program_id && coPrograms.has(m.program_id)))
     const mIds = new Set(visMentors.map((m: any) => m.id))
-    const pr = await supabase.from('mentor_prep').select('mentor_id, topic_id, watched, notes_done, practice_done, presentation_done, state, review_status, last_progress_at, created_at, send_back_count, topic:topic_id(name)')
-    const prep = (pr.data || []).filter((r: any) => mIds.has(r.mentor_id) && (r.state || 'active') !== 'withdrawn')
+    const pr = await selectAll('mentor_prep', 'mentor_id, topic_id, watched, notes_done, practice_done, presentation_done, state, review_status, last_progress_at, created_at, send_back_count, topic:topic_id(name)')
+    const prep = (pr || []).filter((r: any) => mIds.has(r.mentor_id) && (r.state || 'active') !== 'withdrawn')
     // selectAll pages past Supabase's 1000-row cap — a plain select truncates and silently drops the
     // NEWEST ratings (recent daily etiquette), which is why they went missing from analytics.
     const rtAll = await selectAll('mentor_rating', 'mentor_id, category, score, rated_on, weight_snapshot, scope_id, scope_level')
     let ratings: any[] = rtAll.filter((r: any) => mIds.has(r.mentor_id))
     if (MOCK_MENTOR_SUBTOPIC) ratings = [...ratings, ...mockListRatings([...mIds])] // include locally-saved (mock) ratings
     // topic_id -> { subject, topic } so topic-scoped ratings can be shown by Subject › Topic
-    const tp = await selectAll('topic', 'id, name, chapter:chapter_id(subject:subject_id(name))')
-    const topicMap: any = {}; tp.forEach((t: any) => topicMap[t.id] = { topic: t.name, subject: t.chapter?.subject?.name || '—' })
-    // also resolve SUB-TOPIC ids → subject (ratings can be scoped at the sub-topic level)
-    const stp = await selectAll('subtopic', 'id, name, topic:topic_id(name, chapter:chapter_id(subject:subject_id(name)))')
-    stp.forEach((st: any) => topicMap[st.id] = { topic: st.topic?.name || st.name, subject: st.topic?.chapter?.subject?.name || '—' })
-    // deployed mentors (approved deployment) — their rating is hidden in analytics, shown as "Deployed"
-    const dp = MOCK_MENTOR_SUBTOPIC ? mockListDeployments() : ((await supabase.from('mentor_deployment').select('mentor_id, status')).data || [])
+    // group by the PROGRAM (main_subject) — matches the Mentor pipeline, so programs like "Playwright" show in the filter
+    const tp = await selectAll('topic', 'id, name, chapter:chapter_id(subject:subject_id(name, main_subject:main_subject_id(name)))')
+    const topicMap: any = {}; tp.forEach((t: any) => topicMap[t.id] = { topic: t.name, program: t.chapter?.subject?.main_subject?.name || '—', subject: t.chapter?.subject?.name || '—' })
+    // also resolve SUB-TOPIC ids → program + subject (ratings can be scoped at the sub-topic level)
+    const stp = await selectAll('subtopic', 'id, name, topic:topic_id(name, chapter:chapter_id(subject:subject_id(name, main_subject:main_subject_id(name))))')
+    stp.forEach((st: any) => topicMap[st.id] = { topic: st.topic?.name || st.name, program: st.topic?.chapter?.subject?.main_subject?.name || '—', subject: st.topic?.chapter?.subject?.name || '—' })
+    // deployed mentors (approved deployment) — shown as a status alongside the rating
+    const dp = MOCK_MENTOR_SUBTOPIC ? mockListDeployments() : (await selectAll('mentor_deployment', 'mentor_id, status'))
     const deployed = new Set((dp || []).filter((x: any) => x.status === 'approved').map((x: any) => x.mentor_id))
     // mentors with an OPEN internal task (v37) — shown as "Internal Task" instead of a rating
     const it = MOCK_MENTOR_SUBTOPIC ? [] : ((await supabase.from('mentor_internal_task').select('mentor_id, status')).data || [])
@@ -4916,20 +5039,49 @@ function MentorAnalytics() {
     return { readiness, deployReady, overall, risk, reasons, topicsDone, topics: prep.length, lp, prep }
   }
   const rows = d.visMentors.map((m: any) => ({ m, ...metrics(m) }))
-  // a mentor's subject (single-domain) from their assigned prep, falling back to any topic-scoped rating
-  const mentorSubjectOf = (mid: string) => {
-    const cnt: any = {}; d.prep.forEach((p: any) => { if (p.mentor_id !== mid) return; const s = d.topicMap[p.topic_id]?.subject; if (s) cnt[s] = (cnt[s] || 0) + 1 })
+  // a mentor's program / subject from their assigned prep (most-assigned wins), falling back to any topic-scoped rating
+  const mentorFieldOf = (mid: string, field: 'program' | 'subject') => {
+    const cnt: any = {}; d.prep.forEach((p: any) => { if (p.mentor_id !== mid) return; const s = d.topicMap[p.topic_id]?.[field]; if (s && s !== '—') cnt[s] = (cnt[s] || 0) + 1 })
     let best = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a])[0]
-    if (!best) { const r = d.ratings.find((x: any) => x.mentor_id === mid && x.scope_id && d.topicMap[x.scope_id]?.subject); best = r ? d.topicMap[r.scope_id].subject : '' }
+    if (!best) { const r = d.ratings.find((x: any) => x.mentor_id === mid && x.scope_id && d.topicMap[x.scope_id]?.[field] && d.topicMap[x.scope_id][field] !== '—'); best = r ? d.topicMap[r.scope_id][field] : '' }
     return best || null
   }
-  // rating history — every rating from day one to date; "avg" = mean of per-category averages (overallOf)
+  // a mentor's current lifecycle status (mirrors the pipeline / Average-rating note)
+  const statusOf = (m: any) => d.deployed?.has(m.id) ? 'Deployed' : d.internalTask?.has(m.id) ? 'Internal Task'
+    : m.mentor_status === 'upskilling' ? 'Upskilling' : m.mentor_status === 'ready_to_deploy' ? 'Ready to deploy'
+    : m.mentor_status === 'terminated' ? 'Terminated' : m.mentor_status === 'dropout' ? 'Dropout' : 'Under training'
+  // every (program › subject) a mentor is MAPPED to — from their assigned prep AND from any
+  // topic-scoped technical rating they've received. Used to show all their subjects in one row.
+  const mentorPairs = (mid: string) => {
+    const seen: any = {}; const out: { program: string; subject: string }[] = []
+    const add = (t: any) => { if (!t || !t.subject || t.subject === '—') return; const k = (t.program || '—') + '||' + t.subject; if (seen[k]) return; seen[k] = 1; out.push({ program: t.program || '—', subject: t.subject }) }
+    d.prep.forEach((p: any) => { if (p.mentor_id === mid) add(d.topicMap[p.topic_id]) })
+    d.ratings.forEach((r: any) => { if (r.mentor_id === mid && r.scope_id && TECH_CAT_KEYS.has(r.category)) add(d.topicMap[r.scope_id]) })
+    return out
+  }
+  // rating history — ONE row per mentor. "Program / Subject" lists EVERY subject they're mapped to,
+  // and the average / count cover ALL of the mentor's ratings (every subject, every day).
   const histRows = d.visMentors.map((m: any) => {
     const rs = d.ratings.filter((r: any) => r.mentor_id === m.id && r.score != null).slice().sort((a: any, b: any) => String(a.rated_on).localeCompare(String(b.rated_on)))
-    return { key: m.id, name: m.full_name, subject: mentorSubjectOf(m.id), count: rs.length, first: rs[0]?.rated_on || null, last: rs[rs.length - 1]?.rated_on || null, avg: overallOf(m.id), entries: rs, deployed: d.deployed?.has(m.id), internalTask: d.internalTask?.has(m.id), upskilling: m.mentor_status === 'upskilling' }
-  }).sort((a: any, b: any) => (b.avg ?? -1) - (a.avg ?? -1))
-  // subject options come from the mentors actually in view
-  const histSubjOpts = [...new Set(histRows.map((r: any) => r.subject).filter(Boolean))].sort() as string[]
+    let pairs = mentorPairs(m.id)
+    if (!pairs.length) { const ps = mentorFieldOf(m.id, 'subject'); if (ps) pairs = [{ program: mentorFieldOf(m.id, 'program') || '—', subject: ps }] }
+    const programs = [...new Set(pairs.map((p) => p.program))]
+    const subjects = [...new Set(pairs.map((p) => p.subject))]
+    return { key: m.id, mid: m.id, name: m.full_name, pairs, programs, subjects, status: statusOf(m), count: rs.length, first: rs[0]?.rated_on || null, last: rs[rs.length - 1]?.rated_on || null, avg: overallOf(m.id), rank: (m.rank ?? null), entries: rs, deployed: d.deployed?.has(m.id), internalTask: d.internalTask?.has(m.id), upskilling: m.mentor_status === 'upskilling', multiSubject: subjects.length > 1 }
+  }).sort((a: any, b: any) => ((a.rank ?? Infinity) - (b.rank ?? Infinity)) || ((b.avg ?? -1) - (a.avg ?? -1)))
+  // Rank is set by Leads by hand (person.rank) — ranked rows first (ascending), then the rest by avg.
+  const saveRank = async (mid: string, v: number | null) => {
+    const { error } = await supabase.from('person').update({ rank: v }).eq('id', mid).select('id')
+    if (error) { msg.error(/rank/.test(error.message) ? 'Run RecTrack_v39_mentor_rank.sql first to enable ranking.' : error.message); return }
+    setD((prev: any) => prev ? { ...prev, visMentors: prev.visMentors.map((m: any) => m.id === mid ? { ...m, rank: v } : m) } : prev)
+    msg.success(v == null ? 'Rank cleared' : `Rank set to #${v}`)
+  }
+  // filter options — a mentor matches a program/subject if ANY of their mapped pairs do; subjects cascade
+  const allPairs = histRows.flatMap((r: any) => r.pairs)
+  const histProgOpts = [...new Set(histRows.flatMap((r: any) => r.programs).filter(Boolean))].sort() as string[]
+  const histSubjOpts = [...new Set(allPairs.filter((p: any) => !histProg || p.program === histProg).map((p: any) => p.subject).filter(Boolean))].sort() as string[]
+  const STATUS_ORDER = ['Deployed', 'Under training', 'Upskilling', 'Ready to deploy', 'Internal Task', 'Terminated', 'Dropout']
+  const histStatusOpts = [...new Set(histRows.map((r: any) => r.status).filter(Boolean))].sort((a: any, b: any) => STATUS_ORDER.indexOf(a) - STATUS_ORDER.indexOf(b)) as string[]
   const RATING_BANDS = [
     { value: 'gte45', label: '4.5 – 5 (excellent)' },
     { value: 'gte4', label: '4 – 4.5 (good)' },
@@ -4949,21 +5101,34 @@ function MentorAnalytics() {
   }
   const histShown = histRows.filter((r: any) =>
     (!histQ.trim() || String(r.name || '').toLowerCase().includes(histQ.trim().toLowerCase()))
-    && (!histSubj || r.subject === histSubj)
+    && (!histProg || r.programs.includes(histProg))
+    && (!histSubj || r.subjects.includes(histSubj))
+    && (!histStatus || r.status === histStatus)
     && inBand(r.avg))
   const histCols = [
-    { title: 'Sl No', width: 70, render: (_: any, r: any) => <span style={{ color: '#9aa1ad' }}>{r._sl}</span> },
-    { title: 'Mentor', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
-    { title: 'Subject', dataIndex: 'subject', width: 150, render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: <span>Rank{canRank ? <InfoDot text="Set by the Lead — type a number and leave the field to save. Top 3 show a medal." /> : null}</span>, width: canRank ? 110 : 80, align: 'center' as const, render: (_: any, r: any) => {
+      const medal = r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : r.rank === 3 ? '🥉' : null
+      if (canRank) return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>{medal && <span style={{ fontSize: 15 }}>{medal}</span>}<RankCell value={r.rank} onSave={(v: number | null) => saveRank(r.mid, v)} /></span>
+      if (r.rank == null) return <span style={{ color: '#c8ccd4' }}>—</span>
+      return medal ? <span style={{ fontSize: 18 }} title={`Rank ${r.rank}`}>{medal}</span> : <span style={{ fontWeight: 700, color: '#69707d' }}>#{r.rank}</span>
+    } },
+    { title: 'Mentor', dataIndex: 'name', render: (v: string, r: any) => <span><b>{v}</b>{r.multiSubject ? <ATooltip title={`Mapped to ${r.subjects.length} subjects — the average covers all of them`}><Tag color="geekblue" style={{ marginLeft: 6, fontSize: 10, lineHeight: '16px' }}>{r.subjects.length} subjects</Tag></ATooltip> : null}</span> },
+    { title: 'Program / Subject', width: 240, render: (_: any, r: any) => {
+      if (!r.pairs.length) return <span style={{ color: '#9aa1ad' }}>—</span>
+      const byProg: any = {}; r.pairs.forEach((p: any) => { (byProg[p.program] = byProg[p.program] || []).push(p.subject) })
+      return <span>{Object.keys(byProg).sort().map((pg: string) => <div key={pg} style={{ marginBottom: 3 }}>
+        <Tag color="geekblue" style={{ margin: 0 }}>{pg}</Tag>
+        {byProg[pg].filter((s: any) => s && s !== pg).length ? <span style={{ fontSize: 11, color: '#9aa1ad', marginLeft: 4 }}>{[...new Set(byProg[pg].filter((s: any) => s && s !== pg))].join(', ')}</span> : null}
+      </div>)}</span>
+    } },
+    { title: 'Status', dataIndex: 'status', width: 130, render: (v: string) => {
+      const c = v === 'Deployed' ? 'blue' : v === 'Upskilling' ? 'purple' : v === 'Internal Task' ? 'gold' : v === 'Ready to deploy' ? 'green' : (v === 'Terminated' || v === 'Dropout') ? 'red' : 'orange'
+      return <Tag color={c}>{v}</Tag>
+    } },
     { title: 'Ratings', dataIndex: 'count', width: 80 },
     { title: 'First rated', dataIndex: 'first', width: 120, render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
     { title: 'Last rated', dataIndex: 'last', width: 120, render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
-    { title: 'Average rating', dataIndex: 'avg', width: 130, render: (v: number, r: any) => {
-      const ratingTag = v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v.toFixed(2)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span>
-      // when the "All ratings" band filter is active, always show the (updated) numeric rating, not the status tag
-      if (histBand) return ratingTag
-      return r.deployed ? <Tag color="blue">Deployed</Tag> : r.internalTask ? <Tag color="gold">Internal Task</Tag> : r.upskilling ? <Tag color="purple">Upskilling</Tag> : ratingTag
-    } },
+    { title: 'Average rating', dataIndex: 'avg', width: 130, render: (v: number) => v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v.toFixed(2)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
   ]
   const nMentors = rows.length
   const withR = rows.filter((r: any) => r.overall != null)
@@ -4973,51 +5138,85 @@ function MentorAnalytics() {
   // needs attention = average rating below 3 (to date)
   const attention = rows.filter((r: any) => r.overall != null && r.overall < 3).sort((a: any, b: any) => a.overall - b.overall)
   const kpis: any[] = [
-    ['Mentors', String(nMentors), 'Active mentors in your view.'],
-    ['Avg readiness', `${Math.round(avgReadiness * 100)}%`, 'Average % of the 4 prep steps completed across all assigned topics.'],
-    ['Avg rating', avgRating != null ? avgRating.toFixed(1) : '—', "Average of each mentor's rating to date (per-category averages, day one to now), out of 5."],
-    ['At risk', String(atRisk), RISK_INFO],
+    { label: 'Mentors', value: String(nMentors), info: 'Active mentors in your view.', icon: <TeamOutlined />, color: '#2563eb', bg: '#2563eb14' },
+    { label: 'Avg readiness', value: `${Math.round(avgReadiness * 100)}%`, info: 'Average % of the 4 prep steps completed across all assigned topics.', icon: <AimOutlined />, color: '#0d9488', bg: '#0d948814' },
+    { label: 'Avg rating', value: avgRating != null ? avgRating.toFixed(1) : '—', info: "Average of each mentor's rating to date (per-category averages, day one to now), out of 5.", icon: <StarOutlined />, color: '#d97706', bg: '#d9770614' },
+    { label: 'At risk', value: String(atRisk), info: RISK_INFO, icon: <BarChartOutlined />, color: '#dc2626', bg: '#dc262614' },
   ]
-  return <div>
-    <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 12 }}>{isAdmin ? 'All leads · whole company' : 'Your mentors only'}</div>
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 12, marginBottom: 18 }}>
+  const top3 = histRows.filter((r: any) => r.rank != null && r.rank <= 3).slice(0, 3)
+  return <div style={{ margin: -24, padding: 24, minHeight: 'calc(100vh - 56px)', background: 'linear-gradient(180deg,#eaf0fb 0%, #f5f7fb 240px, #f5f7fb 100%)' }}>
+    <div style={{ background: 'linear-gradient(120deg,#1e3a8a 0%, #2563eb 100%)', color: '#fff', borderRadius: 16, padding: '20px 24px', marginBottom: 18, display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxShadow: '0 8px 24px rgba(37,99,235,0.22)' }}>
+      <div>
+        <div style={{ fontSize: 22, fontWeight: 800, letterSpacing: 0.2 }}>Mentor Analytics</div>
+        <div style={{ fontSize: 13, opacity: 0.9, marginTop: 2 }}>{isAdmin ? 'All leads · whole company' : 'Your mentors only'}</div>
+      </div>
+      <TrophyOutlined style={{ fontSize: 48, opacity: 0.22 }} />
+    </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 12, marginBottom: 16 }}>
       {kpis.map((k: any, i: number) => (
-        <div key={i} style={{ background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 10, padding: '12px 14px' }}>
-          <div style={{ fontSize: 12, color: '#69707d' }}>{k[0]}<InfoDot text={k[2]} /></div>
-          <div style={{ fontSize: 24, fontWeight: 800, color: k[0] === 'At risk' && atRisk > 0 ? '#dc2626' : '#161a22' }}>{k[1]}</div>
+        <div key={i} style={{ background: '#fff', border: '1px solid #eef0f3', borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12, boxShadow: '0 1px 2px rgba(16,26,34,0.04)' }}>
+          <div style={{ width: 40, height: 40, borderRadius: 10, display: 'grid', placeItems: 'center', background: k.bg, color: k.color, fontSize: 18 }}>{k.icon}</div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 12, color: '#69707d' }}>{k.label}<InfoDot text={k.info} /></div>
+            <div style={{ fontSize: 24, fontWeight: 800, color: k.label === 'At risk' && atRisk > 0 ? '#dc2626' : '#161a22' }}>{k.value}</div>
+          </div>
         </div>
       ))}
     </div>
+    {top3.length > 0 && (
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 16 }}>
+        {top3.map((r: any) => {
+          const medal = r.rank === 1 ? '🥇' : r.rank === 2 ? '🥈' : '🥉'
+          const bg = r.rank === 1 ? '#fffbe6' : r.rank === 2 ? '#f5f6f8' : '#fff4ec'
+          const bd = r.rank === 1 ? '#ffe58f' : r.rank === 2 ? '#e3e6eb' : '#ffd8b8'
+          return <div key={r.key} style={{ flex: '1 1 200px', background: bg, border: `1px solid ${bd}`, borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 26 }}>{medal}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 15, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</div>
+              <div style={{ fontSize: 12, color: '#69707d' }}>{r.subjects.filter((s: any) => s && s !== '—').join(', ') || '—'} · <b style={{ color: '#16a34a' }}>{r.avg != null ? `${r.avg.toFixed(2)} / 5` : '—'}</b></div>
+            </div>
+          </div>
+        })}
+      </div>
+    )}
     <Card style={{ marginBottom: 16 }} styles={{ body: { padding: 16 } }}>
-      <div style={{ fontWeight: 600, marginBottom: 12 }}>Rating history — day one to date<InfoDot text="Every rating each mentor has received since day one, with their subject and the dates. Expand a row to see the per-category average on top, then each day's scores." /></div>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
-        <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor…" value={histQ} onChange={e => setHistQ(e.target.value)} style={{ maxWidth: 260 }} />
-        <Select allowClear showSearch optionFilterProp="label" placeholder="All subjects" value={histSubj} onChange={(v) => setHistSubj(v ?? null)} style={{ minWidth: 190 }} options={histSubjOpts.map((s) => ({ value: s, label: s }))} />
-        <Select allowClear placeholder="All ratings" value={histBand} onChange={(v) => setHistBand(v ?? null)} style={{ minWidth: 210 }} options={RATING_BANDS} />
-        {(histSubj || histBand || histQ.trim()) && <>
+      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}><TrophyOutlined style={{ color: '#d97706', marginRight: 8 }} />Mentor rankings &amp; rating history<InfoDot text="Mentors ranked by the rank Leads set by hand. Expand a row to see the per-category average and each day's scores." /></div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12, padding: '10px 12px', background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 10 }}>
+        <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor…" value={histQ} onChange={e => setHistQ(e.target.value)} style={{ maxWidth: 240 }} />
+        <Select allowClear showSearch optionFilterProp="label" placeholder="All programs" value={histProg} onChange={(v) => { setHistProg(v ?? null); setHistSubj(null) }} style={{ minWidth: 180 }} options={histProgOpts.map((s) => ({ value: s, label: s }))} />
+        <Select allowClear showSearch optionFilterProp="label" placeholder="All subjects" value={histSubj} onChange={(v) => setHistSubj(v ?? null)} style={{ minWidth: 180 }} options={histSubjOpts.map((s) => ({ value: s, label: s }))} />
+        <Select allowClear placeholder="All statuses" value={histStatus} onChange={(v) => setHistStatus(v ?? null)} style={{ minWidth: 170 }} options={histStatusOpts.map((s) => ({ value: s, label: s }))} />
+        <Select allowClear placeholder="All ratings" value={histBand} onChange={(v) => setHistBand(v ?? null)} style={{ minWidth: 200 }} options={RATING_BANDS} />
+        {(histProg || histSubj || histStatus || histBand || histQ.trim()) && <>
           <Tag color="blue">{histShown.length} mentor{histShown.length === 1 ? '' : 's'}</Tag>
-          <Button size="small" type="text" onClick={() => { setHistQ(''); setHistSubj(null); setHistBand(null) }}>Clear</Button>
+          <Button size="small" type="text" onClick={() => { setHistQ(''); setHistProg(null); setHistSubj(null); setHistStatus(null); setHistBand(null) }}>Clear</Button>
         </>}
       </div>
-      <Table size="small" rowKey="key" columns={histCols as any} dataSource={histShown.map((r: any, i: number) => ({ ...r, _sl: i + 1 }))} pagination={{ pageSize: 12 }}
+      <Table size="small" rowKey="key" columns={histCols as any} dataSource={histShown} pagination={{ pageSize: 12 }}
         locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ratings yet — rate mentors from the Mentor Preparation Board." /> }}
         expandable={{
           rowExpandable: (rec: any) => rec.count > 0,
           expandedRowRender: (rec: any) => {
-            // one row per day; each rating category is its own column (mock & etiquette are daily)
-            const byDate: any = {}
-            rec.entries.forEach((e: any) => { (byDate[e.rated_on] = byDate[e.rated_on] || []).push(e) })
-            const subRows = Object.keys(byDate).sort().map((dt: string) => {
-              const es = byDate[dt]
-              const scoreByCat: any = {}; es.forEach((e: any) => { scoreByCat[e.category] = Number(e.score) })
-              // subject/topic label comes ONLY from a technical (topic-scoped) rating — a daily etiquette
-              // entry (even one with a legacy scope_id) must never masquerade as a topic rating.
-              const scoped = es.find((e: any) => e.scope_id && TECH_CAT_KEYS.has(e.category)); const tm = scoped ? d.topicMap[scoped.scope_id] : null
-              const hasDaily = es.some((e: any) => DAILY_CAT_KEYS.has(e.category))
-              const row: any = { key: dt, date: dt, subject: tm?.subject || '—', topic: tm?.topic || (hasDaily && !tm ? 'Daily etiquette' : '—') }
-              RATING_CATS.forEach(c => { row[c.key] = scoreByCat[c.key] })
-              return row
+            // one row per (day × sub-topic) so a mentor rated in TWO subjects on the same day shows
+            // BOTH topics as separate rows. Technical ratings group by their scope_id (the sub-topic);
+            // daily etiquette (no topic) groups once per day. A stray scope_id on an etiquette category
+            // never counts as technical, so it can't masquerade as a topic rating.
+            const groups: any = {}
+            rec.entries.forEach((e: any) => {
+              const tech = e.scope_id && TECH_CAT_KEYS.has(e.category)
+              const gk = tech ? `${e.rated_on}|${e.scope_id}` : `${e.rated_on}|daily`
+              const g = groups[gk] || (groups[gk] = { date: e.rated_on, scopeId: tech ? e.scope_id : null, daily: !tech, es: [] })
+              g.es.push(e)
             })
+            const subRows = (Object.values(groups) as any[])
+              .sort((a, b) => String(a.date).localeCompare(String(b.date)) || (a.daily ? 1 : 0) - (b.daily ? 1 : 0))
+              .map((g: any) => {
+                const scoreByCat: any = {}; g.es.forEach((e: any) => { scoreByCat[e.category] = Number(e.score) })
+                const tm = g.scopeId ? d.topicMap[g.scopeId] : null
+                const row: any = { key: `${g.date}|${g.scopeId || 'daily'}`, date: g.date, subject: tm?.subject || '—', topic: tm?.topic || (g.daily ? 'Daily etiquette' : '—') }
+                RATING_CATS.forEach(c => { row[c.key] = scoreByCat[c.key] })
+                return row
+              })
             // per-category average from day one to date — shown as the FIRST row (on top), before the date-wise rows
             const catAvg: any = {}; RATING_CATS.forEach(c => { const vv = rec.entries.filter((e: any) => e.category === c.key && e.score != null).map((e: any) => Number(e.score)); catAvg[c.key] = vv.length ? vv.reduce((a: number, b: number) => a + b, 0) / vv.length : null })
             const avgRow: any = { key: '__avg', _avg: true }; RATING_CATS.forEach(c => { avgRow[c.key] = catAvg[c.key] })
@@ -5040,7 +5239,7 @@ function MentorAnalytics() {
           <div style={{ width: 46, height: 38, borderRadius: 8, display: 'grid', placeItems: 'center', fontWeight: 800, fontSize: 15, color: '#dc2626', background: '#dc262618' }}>{r.overall.toFixed(1)}</div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 600, fontSize: 14 }}>{r.m.full_name}</div>
-            <div style={{ fontSize: 12, color: '#9aa1ad' }}>{mentorSubjectOf(r.m.id) || 'No subject yet'}</div>
+            <div style={{ fontSize: 12, color: '#9aa1ad' }}>{mentorFieldOf(r.m.id, 'subject') || 'No subject yet'}</div>
           </div>
           <Tag color="red">Avg {r.overall.toFixed(2)} / 5</Tag>
         </div>
