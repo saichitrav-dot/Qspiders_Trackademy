@@ -174,12 +174,18 @@ function AuthProvider({ children }: { children: any }) {
   useEffect(() => {
     if (!session) { setPerson(null); setAccess(null); setLoading(false); return }
     ;(async () => {
+      const sessionEmail = (session.user.email || '').trim().toLowerCase()
       let { data } = await supabase.from('person').select('*').eq('auth_user_id', session.user.id).maybeSingle()
-      // fallback: match by email if the account isn't linked yet, then self-heal the link
-      if (!data && session.user.email) {
-        const byEmail = await supabase.from('person').select('*').ilike('email', session.user.email).maybeSingle()
-        data = byEmail.data
-        if (data && !data.auth_user_id) { try { await supabase.from('person').update({ auth_user_id: session.user.id }).eq('id', data.id) } catch (e) { /* read still works */ } }
+      // The EMAIL you signed in with is the source of truth. If the auth_user_id link is missing OR points
+      // at a row whose email isn't the one that just signed in (a stale/cross-wired link — e.g. Susan's row
+      // carrying Sravani's auth id), identify the person by email and re-heal the link. This guarantees
+      // everyone lands on their OWN profile even if the stored links are wrong.
+      if (sessionEmail && (!data || String(data.email || '').trim().toLowerCase() !== sessionEmail)) {
+        const byEmail = await supabase.from('person').select('*').ilike('email', sessionEmail).maybeSingle()
+        if (byEmail.data) {
+          data = byEmail.data
+          if (String(data.auth_user_id || '') !== session.user.id) { try { await supabase.from('person').update({ auth_user_id: session.user.id }).eq('id', data.id) } catch (e) { /* read still works */ } }
+        }
       }
       setPerson(data); setLoading(false)
       // load this role's menu-access rights so the UI matches what RLS will allow
