@@ -2004,6 +2004,62 @@ function MentorRateDrawer({ row, onClose, onSaved }: any) {
 }
 // A mentor preps a topic through 4 gated steps (watch video → AI notes → AI practice → presentation review)
 // before being deploy-ready. Admins/managers assign topics; mentors work their own.
+// One sub-topic's technical rating, shown INSIDE the prep/review drawer so rating + review + feedback
+// all live in one place. Leads rate (sliders → inserts mentor_rating); mentors see their scores read-only.
+function SubtopicRating({ mentorId, subtopicId, subtopicName, canRate, canEditSteps, onSaved }: any) {
+  const { message: msg } = AntApp.useApp()
+  const { person } = useAuth()
+  const TECH = RATING_CATS.filter((c: any) => c.scope === 'topic')
+  const [scores, setScores] = useState<any>({})
+  const [saved, setSaved] = useState<any>({})
+  const [remark, setRemark] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [prog, setProg] = useState<any>(null) // this sub-topic's 4-step progress (mentor_subtopic_prep)
+  useEffect(() => { (async () => {
+    const r = await supabase.from('mentor_rating').select('category, score, rated_on, remarks').eq('mentor_id', mentorId).eq('scope_id', subtopicId).order('rated_on', { ascending: false })
+    const seen: any = {}; let rem = ''
+    ;(r.data || []).forEach((x: any) => { if (!TECH.some((c: any) => c.key === x.category)) return; if (x.score != null && seen[x.category] === undefined) seen[x.category] = Number(x.score); if (!rem && x.remarks) rem = x.remarks })
+    setScores(seen); setSaved(seen); setRemark(rem)
+    if (MOCK_MENTOR_SUBTOPIC) { const sp = mockListSubProg([mentorId]).find((x: any) => x.subtopic_id === subtopicId); setProg(sp || {}) }
+    else { const sp = await supabase.from('mentor_subtopic_prep').select('watched, notes_done, practice_done, presentation_done').eq('mentor_id', mentorId).eq('subtopic_id', subtopicId).maybeSingle(); setProg(sp.data || {}) }
+  })() }, [mentorId, subtopicId])
+  const stepsDone = prog ? MENTOR_STEPS.filter((s: any) => prog[s.key]).length : 0
+  async function save() {
+    const rows = TECH.filter((c: any) => scores[c.key] != null).map((c: any) => ({ mentor_id: mentorId, rated_by: person?.id || null, rated_on: dayjs().format('YYYY-MM-DD'), scope_level: 'topic', scope_id: subtopicId, category: c.key, score: scores[c.key], weight_snapshot: 1, remarks: remark || null }))
+    if (!rows.length) { msg.warning('Set at least one score.'); return }
+    setBusy(true); const { error } = await supabase.from('mentor_rating').insert(rows); setBusy(false)
+    if (error) { msg.error(/mentor_rating/.test(error.message) ? 'Run RecTrack_v20.sql first to enable ratings.' : error.message); return }
+    setSaved({ ...scores }); msg.success(`Rated “${subtopicName}” ✓`); onSaved && onSaved()
+  }
+  const vals = TECH.map((c: any) => saved[c.key]).filter((x: any) => x != null)
+  const avg = vals.length ? vals.reduce((a: number, b: number) => a + b, 0) / vals.length : null
+  return <div style={{ border: '1px solid #eef0f3', borderRadius: 10, padding: '10px 12px', marginBottom: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+      <b style={{ fontSize: 13 }}>{subtopicName}</b>
+      {avg != null ? <Tag color={avg >= 4 ? 'green' : avg >= 3 ? 'orange' : 'red'} style={{ margin: 0 }}>{avg.toFixed(1)} / 5</Tag> : <span style={{ fontSize: 12, color: '#9aa1ad' }}>Not rated</span>}
+    </div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: canRate ? 10 : 6 }}>
+      <span style={{ fontSize: 12, color: '#69707d' }}>Progress</span>
+      {prog !== null && <SubtopicSteps mentorId={mentorId} subtopicId={subtopicId} prog={prog} canEdit={!!canEditSteps} onSaved={(_id: string, next: any) => { setProg(next); onSaved && onSaved() }} />}
+      <span style={{ fontSize: 11, color: stepsDone === 4 ? '#16a34a' : '#9aa1ad' }}>{stepsDone}/4</span>
+    </div>
+    {canRate ? <>
+      {TECH.map((c: any) => (
+        <div key={c.key} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 2 }}>
+          <span style={{ flex: 1, fontSize: 12, color: '#69707d' }}>{c.label}</span>
+          <Slider min={0} max={5} step={0.5} value={scores[c.key] ?? 0} onChange={(v: number) => setScores((s: any) => ({ ...s, [c.key]: v }))} style={{ width: 150 }} />
+          <span style={{ width: 26, fontSize: 12, fontWeight: 600, textAlign: 'right' }}>{(scores[c.key] ?? 0).toFixed(1)}</span>
+        </div>
+      ))}
+      <Input size="small" placeholder="Remark (the mentor sees this)" value={remark} onChange={(e) => setRemark(e.target.value)} style={{ margin: '6px 0' }} />
+      <Button type="primary" size="small" loading={busy} onClick={save}>Save rating</Button>
+    </> : (avg != null && <div style={{ fontSize: 12, color: '#374151' }}>
+      {TECH.filter((c: any) => saved[c.key] != null).map((c: any) => `${c.label}: ${saved[c.key]}`).join(' · ')}
+      {remark && <div style={{ color: '#69707d', marginTop: 2 }}>“{remark}”</div>}
+    </div>)}
+  </div>
+}
+
 function MentorPrepDrawer({ row, canEdit, canLead, onClose, onSaved }: any) {
   const { message: msg } = AntApp.useApp()
   const [d, setD] = useState<any>(row)
@@ -2117,6 +2173,12 @@ function MentorPrepDrawer({ row, canEdit, canLead, onClose, onSaved }: any) {
           <div style={{ marginTop: 8 }}><Checkbox checked={!!d.presentation_done} disabled={!canEdit} onChange={e => patch({ presentation_done: e.target.checked })}>{presLabel}</Checkbox></div>
         </>}
       </div>
+
+      {(d.topic?.subtopic || []).length > 0 && <div style={{ borderTop: '1px solid #f0f0f0', marginTop: 16, paddingTop: 14 }}>
+        <b style={{ fontSize: 14 }}><StarOutlined style={{ color: '#d97706', marginRight: 6 }} />Sub-topics — progress &amp; rating</b>
+        <div style={{ fontSize: 12, color: '#9aa1ad', margin: '4px 0 10px' }}>{canLead ? 'Each sub-topic: verify the 4 steps and rate it — saved right here with your review.' : 'Each sub-topic: tick your 4 steps; your Lead’s rating shows here too.'}</div>
+        {[...d.topic.subtopic].sort((a: any, b: any) => (a.sequence ?? 0) - (b.sequence ?? 0)).map((s: any) => s?.name && <SubtopicRating key={s.id} mentorId={d.mentor_id} subtopicId={s.id} subtopicName={s.name} canRate={!!canLead} canEditSteps={!!canEdit} onSaved={onSaved} />)}
+      </div>}
 
       {rs === 'ready_for_review' && !canLead && <div style={{ background: '#e6f4ff', border: '1px solid #bae0ff', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginTop: 12 }}>Submitted for review — locked until your Lead gives feedback.</div>}
       {rs === 'completed' && <div style={{ background: '#f6ffed', border: '1px solid #b7eb8f', borderRadius: 8, padding: '8px 12px', fontSize: 13, marginTop: 12 }}>Completed ✓ — deploy-ready.</div>}
@@ -3186,6 +3248,7 @@ function MentorGeneration() {
   const [sel, setSel] = useState<Set<string>>(new Set())
   const [assignOpen, setAssignOpen] = useState(false); const [popMentors, setPopMentors] = useState<Set<string>>(new Set())
   const [mentorF, setMentorF] = useState<any>(null)
+  const [boardQ, setBoardQ] = useState('') // search by topic / sub-topic / subject / program / chapter
   const [, setRatingByMentor] = useState<any>({}) // per-mentor overall rating (kept for future use; board shows per-sub-topic Technical)
   const [subRatings, setSubRatings] = useState<any>({}) // `${mentor_id}:${subtopic scope_id}` -> Technical avg (sub-topic level)
   const [subRemarks, setSubRemarks] = useState<any>({}) // `${mentor_id}:${scope_id}` -> latest lead remark for that sub-topic
@@ -3451,24 +3514,23 @@ function MentorGeneration() {
   const bcount: Record<string, number> = {}
   mentors.forEach((m: any) => { const b = mentorBucket(m, activeDeployedSet as Set<string>, returnedSet as Set<string>); bcount[b] = (bcount[b] || 0) + 1 })
   const trainingCount = (bcount.in_training || 0) + (bcount.upskilling || 0)
-  const grp = (r: any) => ({ rowSpan: r.firstOfTopic ? r.groupSize : 0 }) // topic-level cells span their sub-topic rows
   const cols = [
-    { title: 'Mentor', onCell: grp, render: (_: any, r: any) => <span><Avatar size={24} style={{ background: '#c2410c', marginRight: 8, fontSize: 11 }}>{(r.prep.mentor?.full_name || '?')[0]}</Avatar>{r.prep.mentor?.full_name || '—'}</span> },
-    { title: 'Sub-topic', render: (_: any, r: any) => <div>
-      <div style={{ fontSize: 11, color: '#9aa1ad' }}>{[r.prep.topic?.chapter?.subject?.main_subject?.name, r.prep.topic?.chapter?.subject?.name, r.prep.topic?.chapter?.name, r.prep.topic?.name].filter(Boolean).join(' › ')}<ATooltip title="View full history / audit trail"><InfoCircleOutlined onClick={(e: any) => { e.stopPropagation(); setHistTopic({ id: r.prep.topic_id, name: r.prep.topic?.name }) }} style={{ marginLeft: 6, color: '#9aa1ad', cursor: 'pointer' }} /></ATooltip></div>
-      <div style={{ fontWeight: 700, fontSize: 13, color: '#161a22', marginTop: 2 }}>{r.subtopic?.name || <span style={{ color: '#9aa1ad', fontWeight: 400 }}>No sub-topics under this topic</span>}</div>
+    { title: 'Mentor', render: (_: any, r: any) => <span><Avatar size={24} style={{ background: '#c2410c', marginRight: 8, fontSize: 11 }}>{(r.prep.mentor?.full_name || '?')[0]}</Avatar>{r.prep.mentor?.full_name || '—'}</span> },
+    { title: 'Topic', render: (_: any, r: any) => <div>
+      <div style={{ fontSize: 11, color: '#9aa1ad' }}>{[r.prep.topic?.chapter?.subject?.main_subject?.name, r.prep.topic?.chapter?.subject?.name, r.prep.topic?.chapter?.name].filter(Boolean).join(' › ')}<ATooltip title="View full history / audit trail"><InfoCircleOutlined onClick={(e: any) => { e.stopPropagation(); setHistTopic({ id: r.prep.topic_id, name: r.prep.topic?.name }) }} style={{ marginLeft: 6, color: '#9aa1ad', cursor: 'pointer' }} /></ATooltip></div>
+      <div style={{ fontWeight: 700, fontSize: 13, color: '#161a22', marginTop: 2 }}>{r.prep.topic?.name || '—'}</div>
+      <div style={{ fontSize: 11, color: '#9aa1ad', marginTop: 2 }}>{r.subCount} sub-topic{r.subCount === 1 ? '' : 's'}</div>
     </div> },
-    { title: '4-step progress', width: 150, render: (_: any, r: any) => r.subtopic ? <SubtopicSteps mentorId={r.prep.mentor_id} subtopicId={r.subtopic.id} prog={subProg[r.prep.mentor_id + ':' + r.subtopic.id]} canEdit={isAdmin || (isMentor && r.prep.mentor_id === person.id)} onSaved={(stid: string, next: any) => setSubProg((m: any) => ({ ...m, [r.prep.mentor_id + ':' + stid]: { ...next } }))} /> : <span style={{ color: '#9aa1ad', fontSize: 12 }}>—</span> },
-    { title: 'Status', width: 140, render: (_: any, r: any) => { if (!r.subtopic) return <span style={{ color: '#9aa1ad' }}>—</span>; const p = subProg[r.prep.mentor_id + ':' + r.subtopic.id] || {}; const n = MENTOR_STEPS.filter(s => p[s.key]).length; return n === 4 ? <Tag color="green">Done</Tag> : n === 0 ? <Tag>Not started</Tag> : <Tag color="orange">In progress ({n}/4)</Tag> } },
-    { title: 'Technical', width: 100, render: (_: any, r: any) => { if (!r.subtopic) return <span style={{ color: '#9aa1ad' }}>—</span>; const v = subRatings[r.prep.mentor_id + ':' + r.subtopic.id]; return v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v.toFixed(1)}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> } },
-    { title: 'Lead remark', width: 240, render: (_: any, r: any) => { if (!r.subtopic) return <span style={{ color: '#9aa1ad' }}>—</span>; const rm = subRemarks[r.prep.mentor_id + ':' + r.subtopic.id]; return rm ? <ATooltip title={`Given ${dayjs(rm.rated_on).format('DD MMM YYYY')}`}><span style={{ fontSize: 12, color: '#374151' }}>{rm.text}</span></ATooltip> : <span style={{ color: '#9aa1ad' }}>—</span> } },
-    { title: 'SLA', width: 100, onCell: grp, render: (_: any, r: any) => { if ((r.prep.review_status || 'open') === 'completed') return <span style={{ color: '#16a34a', fontSize: 12 }}>Done</span>; const dl = dayjs(r.prep.created_at).add(MENTOR_SLA_DAYS, 'day').diff(dayjs(), 'day'); return <span style={{ fontSize: 12, color: dl < 0 ? '#dc2626' : dl <= 1 ? '#d97706' : '#69707d' }}>{dl < 0 ? `${-dl}d overdue` : `${dl}d left`}</span> } },
-    ...(!isMentor ? [{ title: 'Assigned lead', width: 150, onCell: grp, render: (_: any, r: any) => { const m = mentors.find((x: any) => x.id === r.prep.mentor_id); const lids = leadsMap[r.prep.mentor_id]?.length ? leadsMap[r.prep.mentor_id] : (m?.lead_id ? [m.lead_id] : []); return lids.length ? lids.map((lid: string) => nameById[lid] || '—').join(', ') : <span style={{ color: '#9aa1ad' }}>—</span> } }] : []),
-    { title: '', width: 400, render: (_: any, r: any) => <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-      {!isMentor && r.subtopic && <Button size="small" icon={<StarOutlined />} onClick={() => setRateRow({ ...r.prep, subtopic: r.subtopic, mode: 'technical' })}>Technical</Button>}
-      <Button size="small" onClick={() => setOpen(r.prep)}>Open</Button>
-      {isAdmin && r.firstOfTopic && <Popconfirm title={`Deselect this mentor from “${r.prep.topic?.chapter?.subject?.name || 'this subject'}”? Frees all their topics under it.`} okText="Deselect" okButtonProps={{ danger: true }} onConfirm={() => deselectSubject(r.prep.mentor_id, r.prep.topic?.chapter?.subject?.name)}><Button size="small" type="text" danger>Deselect subject</Button></Popconfirm>}
-      {isAdmin && r.firstOfTopic && <Button size="small" type="text" danger title="Withdraw (Program Head only)" onClick={() => { setWdText(''); setWd(r.prep) }}>Withdraw</Button>}
+    { title: 'Sub-topics done', width: 150, render: (_: any, r: any) => r.subCount === 0 ? <span style={{ color: '#9aa1ad' }}>—</span> : <Tag color={r.doneCount === r.subCount ? 'green' : r.doneCount ? 'orange' : 'default'}>{r.doneCount}/{r.subCount} verified</Tag> },
+    { title: 'Status', width: 140, render: (_: any, r: any) => { const rs = r.prep.review_status || 'open'; return rs === 'completed' ? <Tag color="green">Completed</Tag> : rs === 'ready_for_review' ? <Tag color="blue">Ready for review</Tag> : <Tag color="geekblue">In progress</Tag> } },
+    { title: 'Rating', width: 100, render: (_: any, r: any) => r.ratingAvg != null ? <Tag color={r.ratingAvg >= 4 ? 'green' : r.ratingAvg >= 3 ? 'orange' : 'red'}>{r.ratingAvg.toFixed(1)}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: 'Lead remark', width: 220, render: (_: any, r: any) => r.remark ? <ATooltip title={`Given ${dayjs(r.remark.rated_on).format('DD MMM YYYY')}`}><span style={{ fontSize: 12, color: '#374151' }}>{r.remark.text}</span></ATooltip> : <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: 'SLA', width: 100, render: (_: any, r: any) => { if ((r.prep.review_status || 'open') === 'completed') return <span style={{ color: '#16a34a', fontSize: 12 }}>Done</span>; const dl = dayjs(r.prep.created_at).add(MENTOR_SLA_DAYS, 'day').diff(dayjs(), 'day'); return <span style={{ fontSize: 12, color: dl < 0 ? '#dc2626' : dl <= 1 ? '#d97706' : '#69707d' }}>{dl < 0 ? `${-dl}d overdue` : `${dl}d left`}</span> } },
+    ...(!isMentor ? [{ title: 'Assigned lead', width: 150, render: (_: any, r: any) => { const m = mentors.find((x: any) => x.id === r.prep.mentor_id); const lids = leadsMap[r.prep.mentor_id]?.length ? leadsMap[r.prep.mentor_id] : (m?.lead_id ? [m.lead_id] : []); return lids.length ? lids.map((lid: string) => nameById[lid] || '—').join(', ') : <span style={{ color: '#9aa1ad' }}>—</span> } }] : []),
+    { title: '', width: 240, render: (_: any, r: any) => <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+      <Button size="small" type={!isMentor ? 'primary' : 'default'} icon={<StarOutlined />} onClick={() => setOpen(r.prep)}>{!isMentor ? 'Verify & rate' : 'Open'}</Button>
+      {isAdmin && <Popconfirm title={`Deselect this mentor from “${r.prep.topic?.chapter?.subject?.name || 'this subject'}”? Frees all their topics under it.`} okText="Deselect" okButtonProps={{ danger: true }} onConfirm={() => deselectSubject(r.prep.mentor_id, r.prep.topic?.chapter?.subject?.name)}><Button size="small" type="text" danger>Deselect subject</Button></Popconfirm>}
+      {isAdmin && <Button size="small" type="text" danger title="Withdraw (Program Head only)" onClick={() => { setWdText(''); setWd(r.prep) }}>Withdraw</Button>}
     </span> },
   ]
   // tree browser — full Program → Subject → Chapter → Topic → Sub-topic (lead = their programs; mentor = their assigned topics)
@@ -3536,14 +3598,30 @@ function MentorGeneration() {
     <div style={{ fontSize: 11, color: '#9aa1ad', marginTop: 6 }}>Tick one or more {level}s → “Assign to mentors”, or click a name’s › to drill deeper.</div>
   </Card>
   // one display row per SUB-TOPIC; topic-level cells (mentor/status/SLA/lead/actions) span the group via rowSpan
-  const boardRows = (mentorF ? rows.filter((r: any) => r.mentor_id === mentorF) : rows).filter((r: any) => r.topic).flatMap((prep: any) => {
+  // ONE row per topic (prep). Sub-topic detail (per-sub-topic steps + rating) lives in the Open drawer.
+  const bq = boardQ.trim().toLowerCase()
+  const matchBoardQ = (prep: any) => {
+    if (!bq) return true
+    const t = prep.topic
+    const subs = (t?.subtopic || []).map((s: any) => s?.name).filter(Boolean)
+    const hay = [t?.name, t?.chapter?.name, t?.chapter?.subject?.name, t?.chapter?.subject?.main_subject?.name, prep.mentor?.full_name, ...subs].filter(Boolean).join(' ').toLowerCase()
+    return hay.includes(bq)
+  }
+  const boardRows = (mentorF ? rows.filter((r: any) => r.mentor_id === mentorF) : rows).filter((r: any) => r.topic).filter(matchBoardQ).map((prep: any) => {
     const subs = [...(prep.topic?.subtopic || [])].sort((a: any, b: any) => (a.sequence ?? 0) - (b.sequence ?? 0))
-    if (subs.length === 0) return [{ key: prep.id, prep, subtopic: null, firstOfTopic: true, groupSize: 1 }]
-    return subs.map((st: any, i: number) => ({ key: prep.id + ':' + st.id, prep, subtopic: st, firstOfTopic: i === 0, groupSize: subs.length }))
+    const doneCount = subs.filter((s: any) => { const p = subProg[prep.mentor_id + ':' + s.id] || {}; return MENTOR_STEPS.every((k: any) => p[k.key]) }).length
+    const rvals = subs.map((s: any) => subRatings[prep.mentor_id + ':' + s.id]).filter((v: any) => v != null)
+    const ratingAvg = rvals.length ? rvals.reduce((a: number, b: number) => a + b, 0) / rvals.length : null
+    let remark: any = null; subs.forEach((s: any) => { const rm = subRemarks[prep.mentor_id + ':' + s.id]; if (rm && (!remark || String(rm.rated_on) > String(remark.rated_on))) remark = rm })
+    return { key: prep.id, prep, subCount: subs.length, doneCount, ratingAvg, remark }
   })
   const boardCard = <Card title={isMentor ? 'My Preparation' : 'Mentor Preparation Board'}
-    extra={!isMentor ? <Select allowClear showSearch optionFilterProp="label" placeholder="Filter by mentor" style={{ minWidth: 200 }} value={mentorF} onChange={setMentorF} options={mentors.map((m: any) => ({ value: m.id, label: m.full_name }))} /> : undefined}>
-    <Table size="middle" rowKey="key" columns={cols as any} dataSource={boardRows} pagination={{ pageSize: 20 }} locale={{ emptyText: <Empty description={isMentor ? 'Nothing assigned to you yet' : 'No topics assigned to your mentors yet'} /> }} />
+    extra={<span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search topic / sub-topic / subject…" value={boardQ} onChange={(e) => setBoardQ(e.target.value)} style={{ width: 260 }} />
+      {!isMentor && <Select allowClear showSearch optionFilterProp="label" placeholder="Filter by mentor" style={{ minWidth: 190 }} value={mentorF} onChange={setMentorF} options={mentors.map((m: any) => ({ value: m.id, label: m.full_name }))} />}
+    </span>}>
+    {(bq || mentorF) && <div style={{ marginBottom: 10, fontSize: 12, color: '#69707d' }}>{boardRows.length} topic{boardRows.length === 1 ? '' : 's'} match{boardRows.length === 1 ? 'es' : ''}{bq ? ` “${boardQ.trim()}”` : ''}</div>}
+    <Table size="middle" rowKey="key" columns={cols as any} dataSource={boardRows} pagination={{ pageSize: 20 }} locale={{ emptyText: <Empty description={bq ? 'No topics match your search' : isMentor ? 'Nothing assigned to you yet' : 'No topics assigned to your mentors yet'} /> }} />
   </Card>
   // Daily corporate etiquette — rated ONCE A DAY per mentor (not per topic). One row per mentor under training.
   const dailyMentors = Array.from(new Map((rows as any[]).filter((r: any) => r.mentor_id && r.topic).map((r: any) => [r.mentor_id, r])).values())
