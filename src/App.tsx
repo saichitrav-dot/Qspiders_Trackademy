@@ -14,6 +14,7 @@ import {
 import dayjs from 'dayjs'
 import { FunnelChart, Funnel, LabelList, PieChart, Pie, BarChart, Bar, XAxis, YAxis, Tooltip, Cell, ResponsiveContainer, Treemap } from 'recharts'
 import { supabase } from './supabase'
+import Projects, { CandidateApp } from './Projects'
 import { MOCK_GOALS, mockListGoals, mockSaveGoal, MOCK_MENTOR_SUBTOPIC, mockListSubProg, mockSaveSubProg, mockListRatings, mockSaveRatings, mockRemoveDailyRatings, mockListMentorLeads, mockAllMentorLeads, mockSaveMentorLeads, mockAllProgramTrainers, mockSaveProgramTrainers, mockListDeployments, mockAddDeployment, mockUpdateDeployment, mockListHolidays, mockAddHoliday, mockUpdateHoliday, mockDeleteHoliday, mockListReleases, mockAddRelease, mockDeleteRelease, mockReleaseItems, mockSetReleaseItem, mockListAttendance, mockAllAttendance, mockSetAttendance, mockAllMentorStatus, mockSetMentorStatus, mockListOnlineBatches, mockAddOnlineBatch, mockUpdateOnlineBatch, mockDeleteOnlineBatch } from './mockGoals'
 
 const { Sider, Header, Content } = Layout
@@ -263,6 +264,7 @@ function Shell({ children }: { children: any }) {
     { key: '/editing', icon: <ScissorOutlined />, label: 'Editing' },
     { key: '/goals', icon: <AimOutlined />, label: 'Weekly Goals' },
     { key: '/mentor', icon: <ReadOutlined />, label: 'Mentor Management' },
+    { key: '/projects', icon: <AppstoreOutlined />, label: 'Projects' },
     { key: '/reviews', icon: <SafetyCertificateOutlined />, label: 'Reviews' },
     { key: '/sla', icon: <FieldTimeOutlined />, label: 'SLA & Delays' },
     { key: '/management', icon: <BarChartOutlined />, label: 'Management' },
@@ -3749,10 +3751,17 @@ function MentorGeneration() {
   const otherCombos = comboMap(otherGroup)
   // Java Full Stack breaks down by its SUBJECTS (Core Java / Advance Java / Spring Framework / Spring Boot).
   // A candidate on several Java subjects is counted under each.
+  // Core Java vs Advance Java — Spring Framework & Spring Boot count as Advance Java
+  const javaBucket = (s: string) => { const l = s.trim().toLowerCase(); return (/\bcore\b/.test(l) || l === 'java') ? 'Core Java' : 'Advance Java' }
   const mentorJavaSubjects: Record<string, Set<string>> = {}
-  rows.forEach((r: any) => { const prog = r.topic?.chapter?.subject?.main_subject?.name; const subj = r.topic?.chapter?.subject?.name; if (prog && /java/i.test(prog) && subj) (mentorJavaSubjects[r.mentor_id] = mentorJavaSubjects[r.mentor_id] || new Set()).add(subjDisplay(subj)) })
+  rows.forEach((r: any) => { const prog = r.topic?.chapter?.subject?.main_subject?.name; const subj = r.topic?.chapter?.subject?.name; if (prog && /java/i.test(prog) && subj) (mentorJavaSubjects[r.mentor_id] = mentorJavaSubjects[r.mentor_id] || new Set()).add(javaBucket(subj)) })
+  // a candidate who has moved on to Advance Java (or Spring) counts under Advance Java ONLY, not Core Java
   const javaSubs: Record<string, any[]> = {}
-  javaGroup.forEach(({ m, ps }: any) => { const subs = mentorJavaSubjects[m.id] ? [...mentorJavaSubjects[m.id]] : ps; subs.forEach((s: string) => { (javaSubs[s] = javaSubs[s] || []).push(m); (subjTrainingMentors[s] = subjTrainingMentors[s] || []).push(m) }) })
+  javaGroup.forEach(({ m, ps }: any) => {
+    const set = mentorJavaSubjects[m.id]
+    const bucket = set ? (set.has('Advance Java') ? 'Advance Java' : 'Core Java') : (ps[0] || 'Core Java')
+    ;(javaSubs[bucket] = javaSubs[bucket] || []).push(m); (subjTrainingMentors[bucket] = subjTrainingMentors[bucket] || []).push(m)
+  })
   // top-level rows: Python expands into combinations, Java into its subjects; every other combination is a flat row
   const topRows: any[] = []
   if (pyGroup.length) topRows.push({ key: '__py', name: 'Python Full stack', count: pyGroup.length, kind: 'python', breakdown: pyCombos })
@@ -6298,6 +6307,7 @@ export default function App() {
           <BrowserRouter>
             <Routes>
               <Route path="/login" element={<Login />} />
+              <Route path="/student" element={<CandidateApp />} />
               <Route path="/dashboard" element={<Protected><Shell><WorkDashboard /></Shell></Protected>} />
               <Route path="/" element={<Protected><Shell><CommandCenter /></Shell></Protected>} />
               <Route path="/studio" element={<Protected><Shell><StudioBoard /></Shell></Protected>} />
@@ -6307,6 +6317,7 @@ export default function App() {
               <Route path="/assignments" element={<Protected><Shell><Assignments /></Shell></Protected>} />
               <Route path="/editing" element={<Protected><Shell><EditingQueue /></Shell></Protected>} />
               <Route path="/goals" element={<Protected><Shell><WeeklyGoals /></Shell></Protected>} />
+              <Route path="/projects" element={<Protected><Shell><Projects /></Shell></Protected>} />
               <Route path="/mentor" element={<Protected><Shell><MentorGeneration /></Shell></Protected>} />
               <Route path="/reviews" element={<Protected><Shell><Reviews /></Shell></Protected>} />
               <Route path="/sla" element={<Protected><Shell><SLADelays /></Shell></Protected>} />
