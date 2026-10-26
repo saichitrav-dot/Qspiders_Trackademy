@@ -603,7 +603,11 @@ function CandidatePortal({ db, mutate, candidate, onLogout }: any) {
   const norm = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
   let mySubject: string = batch?.subject || candidate.subject || ''
   if (!mySubject && batchName) { const bn = norm(batchName); mySubject = allSubjects.find((s) => bn.includes(norm(s))) || '' }
-  const syllabus = mySubject ? allSyl.filter((s: any) => s.subject === mySubject) : allSyl
+  // match on a normalised subject name (case/spacing tolerant). If nothing matches (mis-set subject),
+  // fall back to the whole subject's syllabus so the student is never stuck with an empty tree.
+  const myNorm = norm(mySubject)
+  const filtered = mySubject ? allSyl.filter((s: any) => norm(s.subject) === myNorm) : allSyl
+  const syllabus = filtered.length ? filtered : allSyl
   const visIds = new Set(syllabus.map((s: any) => s.id))
   const myRatings = db.ratings.filter((r: any) => r.candidateId === candidate.id && visIds.has(r.topicId))
   const statusOf = (nodeId: string, activity: string) => db.progress.find((p: any) => p.candidateId === candidate.id && p.topicId === nodeId && p.activity === activity)?.status || 'Not started'
