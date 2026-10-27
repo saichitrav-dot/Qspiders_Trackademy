@@ -15,7 +15,7 @@ import {
 import {
   AppstoreOutlined, PlusOutlined, TeamOutlined, CalendarOutlined, ReadOutlined, StarOutlined,
   RocketOutlined, DashboardOutlined, DeleteOutlined, EditOutlined, UploadOutlined, BankOutlined,
-  ArrowLeftOutlined, DownloadOutlined, PartitionOutlined, ReloadOutlined,
+  ArrowLeftOutlined, DownloadOutlined, PartitionOutlined, ReloadOutlined, SearchOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { supabase } from './supabase'
@@ -610,6 +610,7 @@ function CandidatePortal({ sess, onLogout }: any) {
     setBoot(data)
   }, [sess, msg, onLogout])
   useEffect(() => { load() }, [load])
+  const [query, setQuery] = useState('')
   if (!boot) return <div style={{ display: 'grid', placeItems: 'center', height: 300 }}><Spin /></div>
   const candidate = boot.candidate
   const allSyl = (boot.syllabus || []).map((s: any) => ({ id: s.id, subject: s.subject, chapter: s.chapter, topic: s.topic, subtopic: s.subtopic }))
@@ -637,8 +638,10 @@ function CandidatePortal({ sess, onLogout }: any) {
   // Build the tree preserving the uploaded sheet's exact order (first-seen),
   // never alphabetical: Subject → Chapter → Topic → Sub-topic leaves.
   const pick = (arr: any[], key: string, make: () => any) => { let n = arr.find((x) => x._k === key); if (!n) { n = make(); n._k = key; arr.push(n) } return n }
+  const ql = query.trim().toLowerCase()
+  const shown = ql ? syllabus.filter((s: any) => (`${s.topic || ''} ${s.subtopic || ''}`).toLowerCase().includes(ql)) : syllabus
   const tree: any[] = []
-  syllabus.forEach((s: any) => {
+  shown.forEach((s: any) => {
     const subj = pick(tree, s.subject, () => ({ subject: s.subject, chapters: [] }))
     const ch = pick(subj.chapters, s.chapter, () => ({ chapter: s.chapter, topics: [] }))
     const tp = pick(ch.topics, s.topic, () => ({ topic: s.topic, leaves: [] }))
@@ -656,9 +659,12 @@ function CandidatePortal({ sess, onLogout }: any) {
         <Button onClick={onLogout}>Sign out</Button>
       </span>
     </div>
-    <Card size="small" title="My syllabus — update your progress" styles={{ body: { padding: 14 } }}>
+    <Card size="small" title="My syllabus — update your progress"
+      extra={syllabus.length ? <Input allowClear size="small" prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search topic / sub-topic" value={query} onChange={(e) => setQuery(e.target.value)} style={{ width: 240 }} /> : null}
+      styles={{ body: { padding: 14 } }}>
       {syllabus.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No syllabus yet — your trainer will add it." />
-        : <Collapse defaultActiveKey={tree.map((t: any) => t.subject)} items={tree.map((node: any) => ({
+        : shown.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span>No topic or sub-topic matches “{query}”.</span>} />
+        : <Collapse key={ql} defaultActiveKey={tree.map((t: any) => t.subject)} items={tree.map((node: any) => ({
           key: node.subject, label: <b>{node.subject}</b>,
           children: node.chapters.map((chNode: any, ci: number) => (
             <div key={ci} style={{ marginBottom: 10 }}>
