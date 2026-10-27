@@ -32,6 +32,12 @@ create index if not exists ix_pj_att_cand       on pj_attendance(candidate_id);
 create index if not exists ix_pj_dep_cand       on pj_deployment(candidate_id);
 create index if not exists ix_pj_prog_cand      on pj_progress(candidate_id);
 
+-- preserve the uploaded sheet's row order so the student tree appears exactly
+-- as the Excel: Subject → Chapter → Topic → Sub-topic, in sheet order.
+create sequence if not exists pj_syllabus_ord_seq;
+alter table pj_syllabus add column if not exists ord bigint default nextval('pj_syllabus_ord_seq');
+create index if not exists ix_pj_syl_ord on pj_syllabus(subject_id, ord);
+
 -- ---------- RLS: signed-in staff manage everything; anon has NO direct table access ----------
 do $$ declare t text; begin
   foreach t in array array['pj_org','pj_subject','pj_batch','pj_candidate','pj_syllabus','pj_rating','pj_attendance','pj_deployment','pj_progress'] loop
@@ -78,7 +84,7 @@ begin
   return jsonb_build_object('ok', true,
     'candidate', to_jsonb(c) - 'pin',
     'subjectName', s.name, 'batchName', b.name, 'covers', b.covers,
-    'syllabus', coalesce((select jsonb_agg(to_jsonb(x)) from pj_syllabus x where x.subject_id = c.subject_id), '[]'::jsonb),
+    'syllabus', coalesce((select jsonb_agg(to_jsonb(x) order by x.ord nulls last, x.id) from pj_syllabus x where x.subject_id = c.subject_id), '[]'::jsonb),
     'ratings',  coalesce((select jsonb_agg(to_jsonb(x)) from pj_rating   x where x.candidate_id = c.id), '[]'::jsonb),
     'progress', coalesce((select jsonb_agg(to_jsonb(x)) from pj_progress x where x.candidate_id = c.id), '[]'::jsonb));
 end $$;

@@ -38,7 +38,8 @@ const needV41 = (e: any) => e && MISSING.test(e.message || '')
 type DB = { orgs: any[]; projects: any[]; batches: any[]; candidates: any[]; syllabus: any[]; ratings: any[]; attendance: any[]; deployments: any[]; progress: any[] }
 async function loadAll(): Promise<{ db: DB; err: any }> {
   const q = (t: string) => supabase.from(t).select('*')
-  const [o, s, b, c, sy, r, a, d, p] = await Promise.all([q('pj_org'), q('pj_subject'), q('pj_batch'), q('pj_candidate'), q('pj_syllabus'), q('pj_rating'), q('pj_attendance'), q('pj_deployment'), q('pj_progress')])
+  const qSyl = () => supabase.from('pj_syllabus').select('*').order('ord', { ascending: true, nullsFirst: false }).order('id', { ascending: true })
+  const [o, s, b, c, sy, r, a, d, p] = await Promise.all([q('pj_org'), q('pj_subject'), q('pj_batch'), q('pj_candidate'), qSyl(), q('pj_rating'), q('pj_attendance'), q('pj_deployment'), q('pj_progress')])
   const err = [o, s, b, c, sy, r, a, d, p].find((x) => x.error)?.error
   const batches = (b.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, name: x.name, subject: x.covers || '' }))
   const bn = (id: string) => batches.find((x: any) => x.id === id)?.name || ''
@@ -633,8 +634,16 @@ function CandidatePortal({ sess, onLogout }: any) {
   const pct = total ? Math.round(100 * done / total) : 0
   const rs = myRatings.filter((r: any) => r.score != null)
   const avg = rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null
-  const tree: any = {}
-  syllabus.forEach((s: any) => { const subj = tree[s.subject] || (tree[s.subject] = {}); const ch = subj[s.chapter] || (subj[s.chapter] = {}); (ch[s.topic] = ch[s.topic] || []).push(s) })
+  // Build the tree preserving the uploaded sheet's exact order (first-seen),
+  // never alphabetical: Subject → Chapter → Topic → Sub-topic leaves.
+  const pick = (arr: any[], key: string, make: () => any) => { let n = arr.find((x) => x._k === key); if (!n) { n = make(); n._k = key; arr.push(n) } return n }
+  const tree: any[] = []
+  syllabus.forEach((s: any) => {
+    const subj = pick(tree, s.subject, () => ({ subject: s.subject, chapters: [] }))
+    const ch = pick(subj.chapters, s.chapter, () => ({ chapter: s.chapter, topics: [] }))
+    const tp = pick(ch.topics, s.topic, () => ({ topic: s.topic, leaves: [] }))
+    tp.leaves.push(s)
+  })
   return <div>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
       <div>
@@ -649,15 +658,15 @@ function CandidatePortal({ sess, onLogout }: any) {
     </div>
     <Card size="small" title="My syllabus — update your progress" styles={{ body: { padding: 14 } }}>
       {syllabus.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No syllabus yet — your trainer will add it." />
-        : <Collapse defaultActiveKey={Object.keys(tree)} items={Object.keys(tree).sort().map((subj) => ({
-          key: subj, label: <b>{subj}</b>,
-          children: Object.keys(tree[subj]).sort().map((ch) => (
-            <div key={ch} style={{ marginBottom: 10 }}>
-              {ch !== '—' && <div style={{ fontSize: 12, color: '#69707d', fontWeight: 700, marginBottom: 6 }}>{ch}</div>}
-              {Object.keys(tree[subj][ch]).sort().map((topic) => (
-                <div key={topic} style={{ marginLeft: ch !== '—' ? 12 : 0, marginBottom: 8 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{topic}</div>
-                  {tree[subj][ch][topic].map((s: any) => { const r = ratingOf(s.id); return (
+        : <Collapse defaultActiveKey={tree.map((t: any) => t.subject)} items={tree.map((node: any) => ({
+          key: node.subject, label: <b>{node.subject}</b>,
+          children: node.chapters.map((chNode: any, ci: number) => (
+            <div key={ci} style={{ marginBottom: 10 }}>
+              {chNode.chapter !== '—' && <div style={{ fontSize: 12, color: '#69707d', fontWeight: 700, marginBottom: 6 }}>{chNode.chapter}</div>}
+              {chNode.topics.map((tpNode: any, ti: number) => (
+                <div key={ti} style={{ marginLeft: chNode.chapter !== '—' ? 12 : 0, marginBottom: 8 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{tpNode.topic}</div>
+                  {tpNode.leaves.map((s: any) => { const r = ratingOf(s.id); return (
                     <div key={s.id} style={{ border: '1px solid #eef0f3', borderRadius: 8, padding: '8px 10px', marginBottom: 6, marginLeft: 12 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                         <span style={{ fontWeight: 600, fontSize: 13 }}>{leafLabel(s)}</span>
