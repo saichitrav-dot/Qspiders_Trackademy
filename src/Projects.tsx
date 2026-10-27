@@ -1,31 +1,24 @@
 // ============================================================================
-// Projects — SELF-CONTAINED feature (localStorage; does not touch existing code/data).
-//   Organisation → Subject → Batch → Students
-//   Each Subject has: Batches & Students, Attendance, Syllabus (Subject/Chapter/
-//   Topic/Sub-topic), topic-wise Ratings, Candidate progress, Deployment pipeline.
-//   Candidate self-service portal (/student): update completion on a syllabus TREE
-//   and see the ratings their trainer gave (read-only).
+// Projects — SUPABASE-backed (shared across users & devices). Needs RecTrack_v41.
+//   Organisation → Subject → Batch → Students.
+//   Staff manage via pj_* tables (signed-in). Students sign in at /student with
+//   email + optional PIN through SECURITY DEFINER functions and update their own
+//   progress; they see only their batch's subject as a Subject→Chapter→Topic→
+//   Sub-topic tree, plus the ratings their trainer gave (read-only).
 // ============================================================================
-import { useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 import {
   Card, Tabs, Table, Tag, Button, Input, Modal, Form, Select, DatePicker, Empty,
-  Segmented, Popconfirm, Statistic, Row, Col, Progress, Upload, App as AntApp, Tooltip, Collapse,
+  Segmented, Popconfirm, Statistic, Row, Col, Progress, Upload, App as AntApp, Tooltip, Collapse, Spin,
 } from 'antd'
 import {
   AppstoreOutlined, PlusOutlined, TeamOutlined, CalendarOutlined, ReadOutlined, StarOutlined,
   RocketOutlined, DashboardOutlined, DeleteOutlined, EditOutlined, UploadOutlined, BankOutlined,
-  ArrowLeftOutlined, DownloadOutlined, PartitionOutlined,
+  ArrowLeftOutlined, DownloadOutlined, PartitionOutlined, ReloadOutlined,
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
-
-// ---------- store (localStorage) ----------
-const LS_KEY = 'trackademy_projects_v1'
-type DB = { orgs: any[]; projects: any[]; batches: any[]; candidates: any[]; attendance: any[]; syllabus: any[]; ratings: any[]; deployments: any[]; progress: any[] }
-const emptyDB: DB = { orgs: [], projects: [], batches: [], candidates: [], attendance: [], syllabus: [], ratings: [], deployments: [], progress: [] }
-function loadDB(): DB { try { const r = localStorage.getItem(LS_KEY); return r ? { ...emptyDB, ...JSON.parse(r) } : emptyDB } catch { return emptyDB } }
-function saveDB(db: DB) { try { localStorage.setItem(LS_KEY, JSON.stringify(db)) } catch { /* ignore */ } }
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
+import { supabase } from './supabase'
 
 const ACTIVITIES = ['Videos', 'Presentation', 'Assignment', 'Assessment', 'Mock Test']
 const ACT_STATUS = ['Not started', 'In progress', 'Completed']
@@ -34,51 +27,66 @@ const DEP_COLOR: Record<string, string> = { 'Profiles shared': 'blue', 'Intervie
 const ATT_OPTS = ['Present', 'Absent', 'Late', 'Leave']
 const PRIMARY = '#ff6a00'
 const slCol = { title: 'Sl No', width: 64, render: (_: any, r: any, i: number) => <span style={{ color: '#9aa1ad' }}>{r._sl ?? i + 1}</span> }
-const withSl = (arr: any[]) => (arr || []).map((r, i) => ({ ...r, _sl: i + 1 }))
-const isDeployed = (db: DB, candidateId: string) => db.deployments.some((d) => d.candidateId === candidateId && d.status === 'Deployed')
-// a syllabus row's leaf label + full path
 const leafLabel = (s: any) => (s.subtopic && s.subtopic !== '—') ? s.subtopic : s.topic
 const nodePath = (s: any) => [s.subject, s.chapter, s.topic, s.subtopic].filter((x: string) => x && x !== '—').join(' › ')
+const candName = (candidates: any[], id: string) => candidates.find((c) => c.id === id)?.name || '—'
+const avgRatingOf = (ratings: any[], candidateId: string) => { const rs = ratings.filter((r) => r.candidateId === candidateId && r.score != null); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null }
+const MISSING = /relation .*pj_|does not exist|schema cache|function pj_/i
+const needV41 = (e: any) => e && MISSING.test(e.message || '')
+
+// ---------- data access (Supabase) ----------
+type DB = { orgs: any[]; projects: any[]; batches: any[]; candidates: any[]; syllabus: any[]; ratings: any[]; attendance: any[]; deployments: any[]; progress: any[] }
+async function loadAll(): Promise<{ db: DB; err: any }> {
+  const q = (t: string) => supabase.from(t).select('*')
+  const [o, s, b, c, sy, r, a, d, p] = await Promise.all([q('pj_org'), q('pj_subject'), q('pj_batch'), q('pj_candidate'), q('pj_syllabus'), q('pj_rating'), q('pj_attendance'), q('pj_deployment'), q('pj_progress')])
+  const err = [o, s, b, c, sy, r, a, d, p].find((x) => x.error)?.error
+  const batches = (b.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, name: x.name, subject: x.covers || '' }))
+  const bn = (id: string) => batches.find((x: any) => x.id === id)?.name || ''
+  return {
+    err,
+    db: {
+      orgs: o.data || [],
+      projects: (s.data || []).map((x: any) => ({ id: x.id, orgId: x.org_id, name: x.name, desc: x.descr || '' })),
+      batches,
+      candidates: (c.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, batchId: x.batch_id, name: x.name, email: x.email, contact: x.contact, pin: x.pin, batch: bn(x.batch_id) })),
+      syllabus: (sy.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, subject: x.subject, chapter: x.chapter, topic: x.topic, subtopic: x.subtopic })),
+      ratings: (r.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, topicId: x.node_id, score: x.score, remark: x.remark, date: x.rated_on })),
+      attendance: (a.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, date: x.att_date, status: x.status })),
+      deployments: (d.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, company: x.company, status: x.status, remark: x.remark, date: x.dep_date })),
+      progress: (p.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, topicId: x.node_id, activity: x.activity, status: x.status })),
+    },
+  }
+}
+// write helpers — each returns the supabase error (or null)
+const ins = async (t: string, row: any) => (await supabase.from(t).insert(row)).error
+const insMany = async (t: string, rows: any[]) => (await supabase.from(t).insert(rows)).error
+const upd = async (t: string, id: string, patch: any) => (await supabase.from(t).update(patch).eq('id', id)).error
+const del = async (t: string, id: string) => (await supabase.from(t).delete().eq('id', id)).error
 
 export default function Projects() {
-  const [db, setDb] = useState<DB>(loadDB)
-  const mutate = (producer: (d: DB) => void) => setDb((prev) => { const next: DB = JSON.parse(JSON.stringify(prev)); producer(next); saveDB(next); return next })
+  const { message: msg } = AntApp.useApp()
+  const [db, setDb] = useState<DB | null>(null)
+  const [missing, setMissing] = useState(false)
   const [sel, setSel] = useState<string | null>(null)
+  const reload = useCallback(async () => { const { db, err } = await loadAll(); if (err && needV41(err)) { setMissing(true); setDb({ orgs: [], projects: [], batches: [], candidates: [], syllabus: [], ratings: [], attendance: [], deployments: [], progress: [] }); return } setMissing(false); setDb(db) }, [])
+  useEffect(() => { reload() }, [reload])
+  const run = useCallback(async (fn: () => Promise<any>, okMsg?: string) => { const e = await fn(); if (e) { msg.error(needV41(e) ? 'Run RecTrack_v41_projects.sql in Supabase first.' : e.message); return false } await reload(); if (okMsg) msg.success(okMsg); return true }, [reload, msg])
+  if (!db) return <div style={{ display: 'grid', placeItems: 'center', height: 300 }}><Spin /></div>
+  if (missing) return <Card><Empty description={<span>Run <b>RecTrack_v41_projects.sql</b> in Supabase to enable the shared Projects feature (tables + student login).</span>} /></Card>
   const project = db.projects.find((p) => p.id === sel)
-  if (project) return <SubjectWorkspace db={db} mutate={mutate} project={project} org={db.orgs.find((o) => o.id === project.orgId)} onBack={() => setSel(null)} />
-  return <OrgHome db={db} mutate={mutate} onOpen={setSel} />
-}
-
-// Standalone candidate portal — its own public route (/student), outside staff auth.
-export function CandidateApp() {
-  const [db, setDb] = useState<DB>(loadDB)
-  const mutate = (producer: (d: DB) => void) => setDb((prev) => { const next: DB = JSON.parse(JSON.stringify(prev)); producer(next); saveDB(next); return next })
-  const [candId, setCandId] = useState<string | null>(null)
-  const candidate = db.candidates.find((c) => c.id === candId)
-  const inner = (!candidate || isDeployed(db, candidate.id))
-    ? <CandidateLogin db={db} onLogin={setCandId} />
-    : <CandidatePortal db={db} mutate={mutate} candidate={candidate} onLogout={() => setCandId(null)} />
-  return <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg,#eef2fb 0%, #f6f8fc 260px, #f6f8fc 100%)' }}>
-    <div style={{ background: '#12141d', color: '#fff', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
-      <div style={{ width: 28, height: 28, borderRadius: 7, background: PRIMARY, display: 'grid', placeItems: 'center', fontWeight: 800 }}>Q</div>
-      <div style={{ fontWeight: 700 }}>Trackademy — Candidate</div>
-    </div>
-    <div style={{ maxWidth: 1100, margin: '0 auto', padding: 24 }}>{inner}</div>
-  </div>
+  if (project) return <SubjectWorkspace db={db} run={run} reload={reload} project={project} org={db.orgs.find((o) => o.id === project.orgId)} onBack={() => setSel(null)} />
+  return <OrgHome db={db} run={run} onOpen={setSel} />
 }
 
 // ============================================================================
 // Organisations + Subjects landing
 // ============================================================================
-function OrgHome({ db, mutate, onOpen }: any) {
-  const { message: msg } = AntApp.useApp()
+function OrgHome({ db, run, onOpen }: any) {
   const [orgModal, setOrgModal] = useState(false)
   const [projModal, setProjModal] = useState<any>(null)
   const [of] = Form.useForm(); const [pf] = Form.useForm()
-  const addOrg = (v: any) => { mutate((d: DB) => { d.orgs.push({ id: uid(), name: v.name.trim() }) }); setOrgModal(false); of.resetFields(); msg.success('Organisation added') }
-  const addProject = (v: any) => { mutate((d: DB) => { d.projects.push({ id: uid(), orgId: projModal.orgId, name: v.name.trim(), desc: v.desc || '' }) }); setProjModal(null); pf.resetFields(); msg.success('Subject created') }
-  const delOrg = (id: string) => mutate((d: DB) => { d.orgs = d.orgs.filter((o) => o.id !== id); d.projects = d.projects.filter((p) => p.orgId !== id) })
-  const delProj = (id: string) => mutate((d: DB) => { d.projects = d.projects.filter((p) => p.id !== id) })
+  const addOrg = async (v: any) => { if (await run(() => ins('pj_org', { name: v.name.trim() }), 'Organisation added')) { setOrgModal(false); of.resetFields() } }
+  const addProject = async (v: any) => { if (await run(() => ins('pj_subject', { org_id: projModal.orgId, name: v.name.trim(), descr: v.desc || null }), 'Subject created')) { setProjModal(null); pf.resetFields() } }
   const projCount = (orgId: string) => db.projects.filter((p: any) => p.orgId === orgId).length
   const candCount = (projId: string) => db.candidates.filter((c: any) => c.projectId === projId).length
   const batchCount = (projId: string) => db.batches.filter((b: any) => b.projectId === projId).length
@@ -86,7 +94,7 @@ function OrgHome({ db, mutate, onOpen }: any) {
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
       <div>
         <div style={{ fontSize: 22, fontWeight: 800 }}><AppstoreOutlined style={{ color: PRIMARY, marginRight: 8 }} />Projects</div>
-        <div style={{ fontSize: 13, color: '#9aa1ad' }}>Organisations → Subjects → Batches → Students.</div>
+        <div style={{ fontSize: 13, color: '#9aa1ad' }}>Organisations → Subjects → Batches → Students. Shared across users; students sign in at <b>/student</b>.</div>
       </div>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => setOrgModal(true)}>Add organisation</Button>
     </div>
@@ -96,7 +104,7 @@ function OrgHome({ db, mutate, onOpen }: any) {
           title={<span><BankOutlined style={{ color: PRIMARY, marginRight: 8 }} /><b>{o.name}</b> <Tag style={{ marginLeft: 8 }}>{projCount(o.id)} subject{projCount(o.id) === 1 ? '' : 's'}</Tag></span>}
           extra={<span style={{ display: 'inline-flex', gap: 8 }}>
             <Button size="small" icon={<PlusOutlined />} onClick={() => setProjModal({ orgId: o.id })}>Add subject</Button>
-            <Popconfirm title="Delete this organisation and its subjects?" okButtonProps={{ danger: true }} onConfirm={() => delOrg(o.id)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm>
+            <Popconfirm title="Delete this organisation and its subjects?" okButtonProps={{ danger: true }} onConfirm={() => run(() => del('pj_org', o.id))}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm>
           </span>}>
           {projCount(o.id) === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No subjects yet" />
             : <Row gutter={[12, 12]}>
@@ -109,7 +117,7 @@ function OrgHome({ db, mutate, onOpen }: any) {
                         {p.desc && <div style={{ fontSize: 12, color: '#9aa1ad', marginTop: 2 }}>{p.desc}</div>}
                         <div style={{ fontSize: 12, color: '#69707d', marginTop: 8 }}>{batchCount(p.id)} batch{batchCount(p.id) === 1 ? '' : 'es'} · {candCount(p.id)} student{candCount(p.id) === 1 ? '' : 's'}</div>
                       </div>
-                      <Popconfirm title="Delete subject?" okButtonProps={{ danger: true }} onConfirm={() => delProj(p.id)}><Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} /></Popconfirm>
+                      <Popconfirm title="Delete subject?" okButtonProps={{ danger: true }} onConfirm={() => run(() => del('pj_subject', p.id))}><Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} /></Popconfirm>
                     </div>
                     <Button type="link" size="small" style={{ paddingLeft: 0, marginTop: 6 }}>Open →</Button>
                   </Card>
@@ -119,9 +127,7 @@ function OrgHome({ db, mutate, onOpen }: any) {
         </Card>
       ))}
     <Modal open={orgModal} title="Add organisation" onCancel={() => setOrgModal(false)} onOk={() => of.submit()} okText="Add">
-      <Form form={of} layout="vertical" onFinish={addOrg} style={{ marginTop: 12 }}>
-        <Form.Item name="name" label="Organisation name" rules={[{ required: true, message: 'Enter a name' }]}><Input placeholder="e.g. QSpiders Hyderabad" /></Form.Item>
-      </Form>
+      <Form form={of} layout="vertical" onFinish={addOrg} style={{ marginTop: 12 }}><Form.Item name="name" label="Organisation name" rules={[{ required: true, message: 'Enter a name' }]}><Input placeholder="e.g. QSpiders Hyderabad" /></Form.Item></Form>
     </Modal>
     <Modal open={!!projModal} title="Create subject" onCancel={() => setProjModal(null)} onOk={() => pf.submit()} okText="Create">
       <Form form={pf} layout="vertical" onFinish={addProject} style={{ marginTop: 12 }}>
@@ -133,25 +139,28 @@ function OrgHome({ db, mutate, onOpen }: any) {
 }
 
 // ============================================================================
-// Subject workspace — tabs
+// Subject workspace
 // ============================================================================
-function SubjectWorkspace({ db, mutate, project, org, onBack }: any) {
+function SubjectWorkspace({ db, run, reload, project, org, onBack }: any) {
   const pid = project.id
-  const batches = db.batches.filter((b: any) => b.projectId === pid)
-  const candidates = db.candidates.filter((c: any) => c.projectId === pid)
-  const syllabus = db.syllabus.filter((s: any) => s.projectId === pid)
-  const ratings = db.ratings.filter((r: any) => r.projectId === pid)
-  const attendance = db.attendance.filter((a: any) => a.projectId === pid)
-  const deployments = db.deployments.filter((d: any) => d.projectId === pid)
-  const progress = db.progress.filter((p: any) => p.projectId === pid)
-  const ctx = { db, mutate, pid, batches, candidates, syllabus, ratings, attendance, deployments, progress }
+  const ctx = {
+    db, run, pid,
+    batches: db.batches.filter((b: any) => b.projectId === pid),
+    candidates: db.candidates.filter((c: any) => c.projectId === pid),
+    syllabus: db.syllabus.filter((s: any) => s.projectId === pid),
+    ratings: db.ratings.filter((r: any) => r.projectId === pid),
+    attendance: db.attendance.filter((a: any) => a.projectId === pid),
+    deployments: db.deployments.filter((d: any) => d.projectId === pid),
+    progress: db.progress.filter((p: any) => p.projectId === pid),
+  }
   return <div>
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
       <Button icon={<ArrowLeftOutlined />} onClick={onBack}>All subjects</Button>
-      <div>
+      <div style={{ flex: 1 }}>
         <div style={{ fontSize: 20, fontWeight: 800 }}>{project.name}</div>
         <div style={{ fontSize: 12, color: '#9aa1ad' }}>{org?.name || 'Organisation'}{project.desc ? ` · ${project.desc}` : ''}</div>
       </div>
+      <Button icon={<ReloadOutlined />} onClick={reload}>Refresh</Button>
     </div>
     <Tabs defaultActiveKey="dash" items={[
       { key: 'dash', label: <span><DashboardOutlined /> Dashboard</span>, children: <SubjectDashboard {...ctx} /> },
@@ -165,45 +174,40 @@ function SubjectWorkspace({ db, mutate, project, org, onBack }: any) {
   </div>
 }
 
-// ---------- shared ----------
-const candName = (candidates: any[], id: string) => candidates.find((c) => c.id === id)?.name || '—'
 function Stat({ label, value, color, suffix }: any) {
   return <Card size="small" styles={{ body: { padding: '12px 16px' } }}><Statistic title={<span style={{ fontSize: 12 }}>{label}</span>} value={value} suffix={suffix} valueStyle={{ color: color || '#161a22', fontWeight: 800, fontSize: 22 }} /></Card>
 }
-const avgRatingOf = (ratings: any[], candidateId: string) => { const rs = ratings.filter((r) => r.candidateId === candidateId && r.score != null); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null }
 
 // ============================================================================
-// Batches & Students  (Subject → Batch → Students)
+// Batches & Students
 // ============================================================================
-function BatchesTab({ mutate, pid, batches, candidates, syllabus }: any) {
+function BatchesTab({ run, pid, batches, candidates, syllabus }: any) {
   const { message: msg } = AntApp.useApp()
-  const [batchModal, setBatchModal] = useState<any>(null) // true (add) or batch (edit)
-  const [stuModal, setStuModal] = useState<any>(null) // { batchId, batchName } (add) or candidate (edit)
+  const [batchModal, setBatchModal] = useState<any>(null)
+  const [stuModal, setStuModal] = useState<any>(null)
   const [bf] = Form.useForm(); const [sf] = Form.useForm()
   const sylSubjects = [...new Set(syllabus.map((s: any) => s.subject))].sort() as string[]
-  const addBatch = (v: any) => {
-    if (batchModal?.id) mutate((d: DB) => { const b = d.batches.find((x) => x.id === batchModal.id); if (b) { b.name = v.name.trim(); b.subject = v.subject || '' } })
-    else mutate((d: DB) => { d.batches.push({ id: uid(), projectId: pid, name: v.name.trim(), subject: v.subject || '' }) })
-    setBatchModal(null); bf.resetFields(); msg.success('Saved')
-  }
   const openBatch = (b?: any) => { setBatchModal(b || true); setTimeout(() => bf.setFieldsValue(b ? { name: b.name, subject: b.subject || undefined } : {}), 0) }
-  const delBatch = (id: string) => mutate((d: DB) => { const cids = new Set(d.candidates.filter((c) => c.batchId === id).map((c) => c.id)); d.batches = d.batches.filter((b) => b.id !== id); d.candidates = d.candidates.filter((c) => c.batchId !== id); d.attendance = d.attendance.filter((a) => !cids.has(a.candidateId)); d.ratings = d.ratings.filter((r) => !cids.has(r.candidateId)); d.progress = d.progress.filter((p) => !cids.has(p.candidateId)); d.deployments = d.deployments.filter((x) => !cids.has(x.candidateId)) })
-  const openStudent = (batch: any, c?: any) => { setStuModal(c || { batchId: batch.id, batchName: batch.name }); setTimeout(() => sf.setFieldsValue(c || {}), 0) }
-  const submitStudent = (v: any) => {
-    if (stuModal?.id) mutate((d: DB) => { const c = d.candidates.find((x) => x.id === stuModal.id); if (c) Object.assign(c, v) })
-    else mutate((d: DB) => { d.candidates.push({ id: uid(), projectId: pid, batchId: stuModal.batchId, batch: stuModal.batchName, ...v }) })
-    setStuModal(null); sf.resetFields(); msg.success('Saved')
+  const saveBatch = async (v: any) => {
+    const row = { name: v.name.trim(), covers: v.subject || null }
+    const ok = batchModal?.id ? await run(() => upd('pj_batch', batchModal.id, row), 'Saved') : await run(() => ins('pj_batch', { subject_id: pid, ...row }), 'Batch added')
+    if (ok) { setBatchModal(null); bf.resetFields() }
   }
-  const delStudent = (id: string) => mutate((d: DB) => { d.candidates = d.candidates.filter((c) => c.id !== id); d.attendance = d.attendance.filter((a) => a.candidateId !== id); d.ratings = d.ratings.filter((r) => r.candidateId !== id); d.progress = d.progress.filter((p) => p.candidateId !== id); d.deployments = d.deployments.filter((x) => x.candidateId !== id) })
+  const openStudent = (batch: any, c?: any) => { setStuModal(c ? { ...c } : { batchId: batch.id, batchName: batch.name }); setTimeout(() => sf.setFieldsValue(c || {}), 0) }
+  const saveStudent = async (v: any) => {
+    const row = { name: v.name.trim(), email: v.email || null, contact: v.contact || null, pin: v.pin || null }
+    const ok = stuModal?.id ? await run(() => upd('pj_candidate', stuModal.id, row), 'Saved') : await run(() => ins('pj_candidate', { subject_id: pid, batch_id: stuModal.batchId, ...row }), 'Student added')
+    if (ok) { setStuModal(null); sf.resetFields() }
+  }
   const bulkAdd = (batch: any, file: File) => {
     const reader = new FileReader()
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const wb = XLSX.read(e.target?.result, { type: 'binary' })
         const rows: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]])
-        const add = rows.map((r) => ({ id: uid(), projectId: pid, batchId: batch.id, batch: batch.name, name: String(r.Name || r.name || '').trim(), email: String(r.Email || r.email || r['Email ID'] || '').trim(), contact: String(r.Contact || r.contact || r['Contact number'] || r.Phone || '').trim(), pin: String(r.PIN || r.pin || '').trim() })).filter((r) => r.name)
+        const add = rows.map((r) => ({ subject_id: pid, batch_id: batch.id, name: String(r.Name || r.name || '').trim(), email: String(r.Email || r.email || r['Email ID'] || '').trim() || null, contact: String(r.Contact || r.contact || r['Contact number'] || r.Phone || '').trim() || null, pin: String(r.PIN || r.pin || '').trim() || null })).filter((r) => r.name)
         if (!add.length) { msg.warning('No rows with a Name column found.'); return }
-        mutate((d: DB) => { d.candidates.push(...add) }); msg.success(`${add.length} student(s) added to ${batch.name}`)
+        await run(() => insMany('pj_candidate', add), `${add.length} student(s) added to ${batch.name}`)
       } catch { msg.error('Could not read the file. Columns: Name, Email, Contact, PIN.') }
     }
     reader.readAsBinaryString(file); return false
@@ -214,7 +218,7 @@ function BatchesTab({ mutate, pid, batches, candidates, syllabus }: any) {
     { title: 'Email', dataIndex: 'email', render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
     { title: 'Contact', dataIndex: 'contact', width: 140, render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
     { title: 'Login PIN', dataIndex: 'pin', width: 90, render: (v: string) => v || <span style={{ color: '#c8ccd4' }}>—</span> },
-    { title: '', width: 80, render: (_: any, c: any) => <span style={{ display: 'inline-flex', gap: 2 }}><Button size="small" type="text" icon={<EditOutlined />} onClick={() => openStudent(batch, c)} /><Popconfirm title="Delete student?" okButtonProps={{ danger: true }} onConfirm={() => delStudent(c.id)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm></span> },
+    { title: '', width: 80, render: (_: any, c: any) => <span style={{ display: 'inline-flex', gap: 2 }}><Button size="small" type="text" icon={<EditOutlined />} onClick={() => openStudent(batch, c)} /><Popconfirm title="Delete student?" okButtonProps={{ danger: true }} onConfirm={() => run(() => del('pj_candidate', c.id))}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm></span> },
   ]
   return <Card styles={{ body: { padding: 16 } }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
@@ -231,23 +235,22 @@ function BatchesTab({ mutate, pid, batches, candidates, syllabus }: any) {
             <Button size="small" icon={<EditOutlined />} onClick={() => openBatch(batch)}>Edit</Button>
             <Upload accept=".xlsx,.xls,.csv" showUploadList={false} beforeUpload={(f: any) => bulkAdd(batch, f)}><Button size="small" icon={<UploadOutlined />}>Import</Button></Upload>
             <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => openStudent(batch)}>Add student</Button>
-            <Popconfirm title={`Delete batch “${batch.name}” and its students?`} okButtonProps={{ danger: true }} onConfirm={() => delBatch(batch.id)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm>
+            <Popconfirm title={`Delete batch “${batch.name}” and its students?`} okButtonProps={{ danger: true }} onConfirm={() => run(() => del('pj_batch', batch.id))}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm>
           </span>,
           children: students.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No students yet — add manually or import Excel (Name, Email, Contact, PIN)." />
             : <Table size="small" rowKey="id" columns={stuCols(batch) as any} dataSource={students} pagination={{ pageSize: 15 }} />,
         }
       })} />}
     <Modal open={!!batchModal} title={batchModal?.id ? 'Edit batch' : 'Add batch'} onCancel={() => setBatchModal(null)} onOk={() => bf.submit()} okText="Save">
-      <Form form={bf} layout="vertical" onFinish={addBatch} style={{ marginTop: 12 }}>
+      <Form form={bf} layout="vertical" onFinish={saveBatch} style={{ marginTop: 12 }}>
         <Form.Item name="name" label="Batch name" rules={[{ required: true, message: 'Enter a batch name' }]}><Input placeholder="e.g. Oct-26 Batch A" /></Form.Item>
-        <Form.Item name="subject" label="Subject this batch covers" tooltip="Students in this batch see only this subject's syllabus at login. Leave blank to show all subjects.">
-          {sylSubjects.length ? <Select allowClear showSearch placeholder="Pick a subject from the syllabus" options={sylSubjects.map((s) => ({ value: s, label: s }))} />
-            : <Input placeholder="Type the subject name (upload syllabus first to pick)" />}
+        <Form.Item name="subject" label="Subject this batch covers" tooltip="Students see only this subject's syllabus at login.">
+          {sylSubjects.length ? <Select allowClear showSearch placeholder="Pick a subject from the syllabus" options={sylSubjects.map((s) => ({ value: s, label: s }))} /> : <Input placeholder="Type the subject name (upload syllabus first to pick)" />}
         </Form.Item>
       </Form>
     </Modal>
     <Modal open={!!stuModal} title={stuModal?.id ? 'Edit student' : `Add student${stuModal?.batchName ? ` · ${stuModal.batchName}` : ''}`} onCancel={() => setStuModal(null)} onOk={() => sf.submit()} okText="Save">
-      <Form form={sf} layout="vertical" onFinish={submitStudent} style={{ marginTop: 12 }}>
+      <Form form={sf} layout="vertical" onFinish={saveStudent} style={{ marginTop: 12 }}>
         <Form.Item name="name" label="Name" rules={[{ required: true, message: 'Enter a name' }]}><Input placeholder="Student name" /></Form.Item>
         <Row gutter={12}>
           <Col span={12}><Form.Item name="email" label="Email ID" rules={[{ type: 'email', message: 'Invalid email' }]}><Input placeholder="name@example.com" /></Form.Item></Col>
@@ -262,21 +265,21 @@ function BatchesTab({ mutate, pid, batches, candidates, syllabus }: any) {
 // ============================================================================
 // Attendance
 // ============================================================================
-function AttendanceTab({ mutate, pid, batches, candidates, attendance }: any) {
+function AttendanceTab({ run, pid, batches, candidates, attendance }: any) {
   const { message: msg } = AntApp.useApp()
   const [date, setDate] = useState<any>(dayjs())
   const [bf, setBf] = useState<string | null>(null)
   const dstr = date.format('YYYY-MM-DD')
-  const statusOf = (cid: string) => attendance.find((a: any) => a.candidateId === cid && a.date === dstr)?.status
-  const setStatus = (cid: string, status: string) => mutate((d: DB) => { const rec = d.attendance.find((a) => a.projectId === pid && a.candidateId === cid && a.date === dstr); if (rec) rec.status = status; else d.attendance.push({ id: uid(), projectId: pid, candidateId: cid, date: dstr, status }) })
-  const markAll = (status: string) => { mutate((d: DB) => { shown.forEach((c: any) => { const rec = d.attendance.find((a) => a.projectId === pid && a.candidateId === c.id && a.date === dstr); if (rec) rec.status = status; else d.attendance.push({ id: uid(), projectId: pid, candidateId: c.id, date: dstr, status }) }) }); msg.success(`All marked ${status}`) }
+  const recOf = (cid: string) => attendance.find((a: any) => a.candidateId === cid && a.date === dstr)
+  const setStatus = async (cid: string, status: string) => { const rec = recOf(cid); await run(() => rec ? upd('pj_attendance', rec.id, { status }) : ins('pj_attendance', { subject_id: pid, candidate_id: cid, att_date: dstr, status })) }
+  const markAll = async (status: string) => { for (const c of shown) { const rec = recOf(c.id); await (rec ? upd('pj_attendance', rec.id, { status }) : ins('pj_attendance', { subject_id: pid, candidate_id: c.id, att_date: dstr, status })) } await run(async () => null, `All marked ${status}`); msg.destroy() }
   const pct = (cid: string) => { const recs = attendance.filter((a: any) => a.candidateId === cid); if (!recs.length) return null; return Math.round(100 * recs.filter((r: any) => r.status === 'Present' || r.status === 'Late').length / recs.length) }
   const shown = candidates.filter((c: any) => !bf || c.batchId === bf)
   const cols = [
     slCol,
     { title: 'Student', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
     { title: 'Batch', dataIndex: 'batch', width: 130, render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
-    { title: `Status · ${date.format('DD MMM YYYY')}`, width: 320, render: (_: any, c: any) => <Segmented size="small" value={statusOf(c.id) || ''} onChange={(v) => setStatus(c.id, v as string)} options={ATT_OPTS.map((o) => ({ value: o, label: o }))} /> },
+    { title: `Status · ${date.format('DD MMM YYYY')}`, width: 320, render: (_: any, c: any) => <Segmented size="small" value={recOf(c.id)?.status || ''} onChange={(v) => setStatus(c.id, v as string)} options={ATT_OPTS.map((o) => ({ value: o, label: o }))} /> },
     { title: 'Overall %', width: 130, render: (_: any, c: any) => { const p = pct(c.id); return p == null ? <span style={{ color: '#9aa1ad' }}>—</span> : <Progress percent={p} size="small" strokeColor={p >= 75 ? '#16a34a' : p >= 50 ? '#d97706' : '#dc2626'} /> } },
   ]
   return <Card styles={{ body: { padding: 16 } }}>
@@ -293,21 +296,21 @@ function AttendanceTab({ mutate, pid, batches, candidates, attendance }: any) {
 }
 
 // ============================================================================
-// Syllabus — Subject / Chapter / Topic / Sub-topic (template + Excel), shown as subject cards
+// Syllabus
 // ============================================================================
-function SyllabusTab({ mutate, pid, syllabus }: any) {
+function SyllabusTab({ run, pid, syllabus }: any) {
   const { message: msg } = AntApp.useApp()
   const [f] = Form.useForm()
-  const add = (v: any) => { mutate((d: DB) => { d.syllabus.push({ id: uid(), projectId: pid, subject: (v.subject || '').trim() || 'General', chapter: (v.chapter || '').trim() || '—', topic: (v.topic || '').trim(), subtopic: (v.subtopic || '').trim() || '—' }) }); f.resetFields(); msg.success('Row added') }
+  const add = async (v: any) => { if (await run(() => ins('pj_syllabus', { subject_id: pid, subject: (v.subject || '').trim() || 'General', chapter: (v.chapter || '').trim() || '—', topic: (v.topic || '').trim(), subtopic: (v.subtopic || '').trim() || '—' }), 'Row added')) f.resetFields() }
   const onFile = (file: File) => {
     const reader = new FileReader()
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const wb = XLSX.read(e.target?.result, { type: 'binary' })
         const rows: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]])
-        const add = rows.map((r) => ({ id: uid(), projectId: pid, subject: String(r.Subject || r.subject || 'General').trim(), chapter: String(r.Chapter || r.chapter || '—').trim() || '—', topic: String(r.Topic || r.topic || '').trim(), subtopic: String(r['Sub topic'] || r['Sub-topic'] || r.Subtopic || r.subtopic || '—').trim() || '—' })).filter((r) => r.topic || (r.subtopic && r.subtopic !== '—'))
+        const add = rows.map((r) => ({ subject_id: pid, subject: String(r.Subject || r.subject || 'General').trim(), chapter: String(r.Chapter || r.chapter || '—').trim() || '—', topic: String(r.Topic || r.topic || '').trim(), subtopic: String(r['Sub topic'] || r['Sub-topic'] || r.Subtopic || r.subtopic || '—').trim() || '—' })).filter((r) => r.topic || (r.subtopic && r.subtopic !== '—'))
         if (!add.length) { msg.warning('Nothing to import. Columns: Subject, Chapter, Topic, Sub topic.'); return }
-        mutate((d: DB) => { d.syllabus.push(...add) }); msg.success(`${add.length} row(s) uploaded`)
+        await run(() => insMany('pj_syllabus', add), `${add.length} row(s) uploaded`)
       } catch { msg.error('Could not read the file. Columns: Subject, Chapter, Topic, Sub topic.') }
     }
     reader.readAsBinaryString(file); return false
@@ -328,7 +331,7 @@ function SyllabusTab({ mutate, pid, syllabus }: any) {
     const ws = XLSX.utils.json_to_sheet(rowsOfSubject(subj).map((s: any) => ({ Subject: s.subject, Chapter: s.chapter === '—' ? '' : s.chapter, Topic: s.topic, 'Sub topic': s.subtopic === '—' ? '' : s.subtopic })))
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Syllabus'); XLSX.writeFile(wb, `syllabus-${subj.replace(/[^a-z0-9]+/gi, '-')}.xlsx`)
   }
-  const delSubject = (subj: string) => mutate((d: DB) => { const ids = new Set(d.syllabus.filter((s) => s.projectId === pid && s.subject === subj).map((s) => s.id)); d.syllabus = d.syllabus.filter((s) => !ids.has(s.id)); d.ratings = d.ratings.filter((r) => !ids.has(r.topicId)); d.progress = d.progress.filter((p) => !ids.has(p.topicId)) })
+  const delSubject = async (subj: string) => { for (const s of rowsOfSubject(subj)) await del('pj_syllabus', s.id); await run(async () => null, `Removed ${subj}`) }
   return <Card styles={{ body: { padding: 16 } }}>
     <div style={{ background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 10, padding: 12, marginBottom: 16 }}>
       <Form form={f} layout="inline" onFinish={add} style={{ rowGap: 8 }}>
@@ -340,7 +343,7 @@ function SyllabusTab({ mutate, pid, syllabus }: any) {
         <Form.Item><Upload accept=".xlsx,.xls,.csv" showUploadList={false} beforeUpload={onFile as any}><Button icon={<UploadOutlined />}>Upload syllabus (Excel)</Button></Upload></Form.Item>
         <Form.Item><Button icon={<DownloadOutlined />} onClick={downloadTemplate}>Download template</Button></Form.Item>
       </Form>
-      <div style={{ fontSize: 11, color: '#9aa1ad', marginTop: 8 }}>Template columns — <b>Subject</b>, <b>Chapter</b>, <b>Topic</b>, <b>Sub topic</b>. Fill it, then upload it back.</div>
+      <div style={{ fontSize: 11, color: '#9aa1ad', marginTop: 8 }}>Template columns — <b>Subject</b>, <b>Chapter</b>, <b>Topic</b>, <b>Sub topic</b>.</div>
     </div>
     {subjects.length === 0 ? <Empty description="No syllabus yet — upload an Excel with Subject, Chapter, Topic, Sub topic columns." />
       : <Row gutter={[12, 12]}>
@@ -361,25 +364,23 @@ function SyllabusTab({ mutate, pid, syllabus }: any) {
 }
 
 // ============================================================================
-// Ratings — trainer rates each student per syllabus node (topic / sub-topic)
+// Ratings
 // ============================================================================
-function RatingsTab({ mutate, pid, candidates, syllabus, ratings }: any) {
+function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
   const { message: msg } = AntApp.useApp()
   const [cid, setCid] = useState<string | null>(null)
   const [draft, setDraft] = useState<Record<string, { score?: number; remark?: string }>>({})
   const existing = (candidateId: string, nodeId: string) => ratings.find((r: any) => r.candidateId === candidateId && r.topicId === nodeId)
-  const save = () => {
+  const save = async () => {
     if (!cid) return
     const entries = Object.entries(draft).filter(([, v]) => v.score != null)
     if (!entries.length) { msg.warning('Set at least one score.'); return }
-    mutate((d: DB) => {
-      entries.forEach(([nodeId, v]) => {
-        const rec = d.ratings.find((r) => r.projectId === pid && r.candidateId === cid && r.topicId === nodeId)
-        if (rec) { rec.score = v.score; rec.remark = v.remark ?? rec.remark; rec.date = dayjs().format('YYYY-MM-DD') }
-        else d.ratings.push({ id: uid(), projectId: pid, candidateId: cid, topicId: nodeId, score: v.score, remark: v.remark || '', date: dayjs().format('YYYY-MM-DD') })
-      })
-    })
-    setDraft({}); msg.success('Ratings saved')
+    for (const [nodeId, v] of entries) {
+      const ex = existing(cid, nodeId)
+      if (ex) await upd('pj_rating', ex.id, { score: v.score, remark: v.remark ?? ex.remark, rated_on: dayjs().format('YYYY-MM-DD') })
+      else await ins('pj_rating', { subject_id: pid, candidate_id: cid, node_id: nodeId, score: v.score, remark: v.remark || null, rated_on: dayjs().format('YYYY-MM-DD') })
+    }
+    setDraft({}); await run(async () => null, 'Ratings saved')
   }
   const summaryCols = [
     slCol,
@@ -420,7 +421,7 @@ function RatingsTab({ mutate, pid, candidates, syllabus, ratings }: any) {
 }
 
 // ============================================================================
-// Candidate progress (trainer view) — activity completion + RATINGS per student
+// Candidate progress (trainer view)
 // ============================================================================
 function ProgressTab({ candidates, syllabus, progress, ratings }: any) {
   const [open, setOpen] = useState<string | null>(null)
@@ -436,7 +437,7 @@ function ProgressTab({ candidates, syllabus, progress, ratings }: any) {
   ]
   const ratingList = open ? ratings.filter((r: any) => r.candidateId === open).map((r: any) => { const s = syllabus.find((x: any) => x.id === r.topicId); return { ...r, path: s ? nodePath(s) : '—' } }) : []
   return <Card styles={{ body: { padding: 16 } }}>
-    <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 10 }}>Completion = activities students update themselves. Avg rating = what the trainer gave (also visible to the student).</div>
+    <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 10 }}>Completion = activities students update. Avg rating = what the trainer gave (also shown to the student).</div>
     <Table size="small" rowKey="id" columns={cols as any} dataSource={candidates} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="Add students & syllabus first" /> }} />
     <Modal open={!!open} title={<span>Ratings · {candName(candidates, open || '')}</span>} footer={null} width={640} onCancel={() => setOpen(null)}>
       {ratingList.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ratings given yet" />
@@ -450,21 +451,18 @@ function ProgressTab({ candidates, syllabus, progress, ratings }: any) {
 }
 
 // ============================================================================
-// Deployment — pipeline + dashboard
+// Deployment
 // ============================================================================
-function DeploymentTab({ mutate, pid, candidates, deployments }: any) {
-  const { message: msg } = AntApp.useApp()
+function DeploymentTab({ run, pid, candidates, deployments }: any) {
   const [modal, setModal] = useState<any>(null)
   const [f] = Form.useForm()
   const [sf, setSf] = useState<string | null>(null)
   const open = (rec?: any) => { setModal(rec || {}); setTimeout(() => f.setFieldsValue(rec ? { ...rec, date: rec.date ? dayjs(rec.date) : dayjs() } : { status: 'Profiles shared', date: dayjs() }), 0) }
-  const submit = (v: any) => {
-    const payload = { candidateId: v.candidateId, company: v.company || '', status: v.status, remark: v.remark || '', date: (v.date || dayjs()).format('YYYY-MM-DD') }
-    if (modal?.id) mutate((d: DB) => { const r = d.deployments.find((x) => x.id === modal.id); if (r) Object.assign(r, payload) })
-    else mutate((d: DB) => { d.deployments.push({ id: uid(), projectId: pid, ...payload }) })
-    setModal(null); f.resetFields(); msg.success('Saved')
+  const submit = async (v: any) => {
+    const row = { candidate_id: v.candidateId, company: v.company || null, status: v.status, remark: v.remark || null, dep_date: (v.date || dayjs()).format('YYYY-MM-DD') }
+    const ok = modal?.id ? await run(() => upd('pj_deployment', modal.id, row), 'Saved') : await run(() => ins('pj_deployment', { subject_id: pid, ...row }), 'Saved')
+    if (ok) { setModal(null); f.resetFields() }
   }
-  const del = (id: string) => mutate((d: DB) => { d.deployments = d.deployments.filter((x) => x.id !== id) })
   const shown = deployments.filter((d: any) => !sf || d.status === sf)
   const cols = [
     slCol,
@@ -474,7 +472,7 @@ function DeploymentTab({ mutate, pid, candidates, deployments }: any) {
     { title: 'Company / Client', dataIndex: 'company', render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
     { title: 'Status', dataIndex: 'status', width: 170, render: (v: string) => <Tag color={DEP_COLOR[v]}>{v}</Tag> },
     { title: 'Remarks', dataIndex: 'remark', render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
-    { title: '', width: 90, render: (_: any, r: any) => <span style={{ display: 'inline-flex', gap: 4 }}><Button size="small" type="text" icon={<EditOutlined />} onClick={() => open(r)} /><Popconfirm title="Delete record?" okButtonProps={{ danger: true }} onConfirm={() => del(r.id)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm></span> },
+    { title: '', width: 90, render: (_: any, r: any) => <span style={{ display: 'inline-flex', gap: 4 }}><Button size="small" type="text" icon={<EditOutlined />} onClick={() => open(r)} /><Popconfirm title="Delete record?" okButtonProps={{ danger: true }} onConfirm={() => run(() => del('pj_deployment', r.id))}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm></span> },
   ]
   return <div>
     <DeploymentDashboard candidates={candidates} deployments={deployments} />
@@ -534,9 +532,6 @@ function DeploymentDashboard({ candidates, deployments }: any) {
   </div>
 }
 
-// ============================================================================
-// Subject dashboard (overview)
-// ============================================================================
 function SubjectDashboard({ batches, candidates, attendance, ratings, deployments, syllabus }: any) {
   const attPct = (() => { if (!attendance.length) return null; return Math.round(100 * attendance.filter((a: any) => a.status === 'Present' || a.status === 'Late').length / attendance.length) })()
   const avgRating = (() => { const rs = ratings.filter((r: any) => r.score != null); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null })()
@@ -562,20 +557,32 @@ function SubjectDashboard({ batches, candidates, attendance, ratings, deployment
 }
 
 // ============================================================================
-// Candidate login + self-service portal (TREE to update completion + trainer ratings)
+// Candidate portal (SUPABASE RPCs) — /student
 // ============================================================================
-function CandidateLogin({ db, onLogin }: any) {
+export function CandidateApp() {
+  const [sess, setSess] = useState<any>(null) // { id, email, pin }
+  const inner = sess ? <CandidatePortal sess={sess} onLogout={() => setSess(null)} /> : <CandidateLogin onLogin={setSess} />
+  return <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg,#eef2fb 0%, #f6f8fc 260px, #f6f8fc 100%)' }}>
+    <div style={{ background: '#12141d', color: '#fff', padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ width: 28, height: 28, borderRadius: 7, background: PRIMARY, display: 'grid', placeItems: 'center', fontWeight: 800 }}>Q</div>
+      <div style={{ fontWeight: 700 }}>Trackademy — Candidate</div>
+    </div>
+    <div style={{ maxWidth: 1100, margin: '0 auto', padding: 24 }}>{inner}</div>
+  </div>
+}
+
+function CandidateLogin({ onLogin }: any) {
   const { message: msg } = AntApp.useApp()
-  const [email, setEmail] = useState(''); const [pin, setPin] = useState('')
-  const submit = () => {
+  const [email, setEmail] = useState(''); const [pin, setPin] = useState(''); const [busy, setBusy] = useState(false)
+  const submit = async () => {
     const e = email.trim().toLowerCase()
     if (!e) { msg.warning('Enter your email'); return }
-    const matches = db.candidates.filter((c: any) => String(c.email || '').trim().toLowerCase() === e)
-    if (!matches.length) { msg.error('No candidate found with that email — ask your trainer to add you.'); return }
-    const cand = matches.find((c: any) => !c.pin || String(c.pin) === pin.trim())
-    if (!cand) { msg.error('Incorrect PIN.'); return }
-    if (isDeployed(db, cand.id)) { msg.success('🎉 You have been deployed — your training is complete, so this access is now closed. All the best!'); return }
-    onLogin(cand.id)
+    setBusy(true)
+    const { data, error } = await supabase.rpc('pj_candidate_login', { p_email: e, p_pin: pin.trim() })
+    setBusy(false)
+    if (error) { msg.error(needV41(error) ? 'Not set up yet — ask your trainer to run RecTrack_v41.' : error.message); return }
+    if (!data?.ok) { msg.error(data?.error === 'deployed' ? '🎉 You have been deployed — this access is now closed. All the best!' : 'No account found with that email / PIN. Ask your trainer.'); return }
+    onLogin({ id: data.id, email: e, pin: pin.trim() })
   }
   return <div style={{ maxWidth: 420, margin: '48px auto' }}>
     <Card>
@@ -587,44 +594,52 @@ function CandidateLogin({ db, onLogin }: any) {
       <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" onPressEnter={submit} style={{ marginBottom: 10 }} />
       <div style={{ fontSize: 12, color: '#69707d', marginBottom: 4 }}>PIN <span style={{ color: '#9aa1ad' }}>(only if your trainer set one)</span></div>
       <Input.Password value={pin} onChange={(e) => setPin(e.target.value)} placeholder="PIN" onPressEnter={submit} style={{ marginBottom: 14 }} />
-      <Button type="primary" block onClick={submit}>Sign in</Button>
+      <Button type="primary" block loading={busy} onClick={submit}>Sign in</Button>
     </Card>
   </div>
 }
 
-function CandidatePortal({ db, mutate, candidate, onLogout }: any) {
-  const project = db.projects.find((p: any) => p.id === candidate.projectId)
-  const allSyl = db.syllabus.filter((s: any) => s.projectId === candidate.projectId)
-  // a student sees ONLY their batch's subject. Use the batch's chosen subject; else infer from the batch
-  // name (works for data where the student's batch is stored as plain text, e.g. "Typescript Batch 1").
-  const batch = db.batches.find((b: any) => b.id === candidate.batchId)
-  const batchName = batch?.name || candidate.batch || ''
-  const allSubjects = [...new Set(allSyl.map((s: any) => s.subject))] as string[]
+function CandidatePortal({ sess, onLogout }: any) {
+  const { message: msg } = AntApp.useApp()
+  const [boot, setBoot] = useState<any>(null)
+  const load = useCallback(async () => {
+    const { data, error } = await supabase.rpc('pj_candidate_bootstrap', { p_cid: sess.id, p_email: sess.email, p_pin: sess.pin })
+    if (error) { msg.error(error.message); return }
+    if (!data?.ok) { msg.error('Session expired — please sign in again.'); onLogout(); return }
+    setBoot(data)
+  }, [sess, msg, onLogout])
+  useEffect(() => { load() }, [load])
+  if (!boot) return <div style={{ display: 'grid', placeItems: 'center', height: 300 }}><Spin /></div>
+  const candidate = boot.candidate
+  const allSyl = (boot.syllabus || []).map((s: any) => ({ id: s.id, subject: s.subject, chapter: s.chapter, topic: s.topic, subtopic: s.subtopic }))
   const norm = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
-  let mySubject: string = batch?.subject || candidate.subject || ''
-  if (!mySubject && batchName) { const bn = norm(batchName); mySubject = allSubjects.find((s) => bn.includes(norm(s))) || '' }
-  // match on a normalised subject name (case/spacing tolerant). If nothing matches (mis-set subject),
-  // fall back to the whole subject's syllabus so the student is never stuck with an empty tree.
+  const allSubjects = [...new Set(allSyl.map((s: any) => s.subject))] as string[]
+  let mySubject: string = boot.covers || ''
+  if (!mySubject && boot.batchName) { const bn = norm(boot.batchName); mySubject = allSubjects.find((s) => bn.includes(norm(s))) || '' }
   const myNorm = norm(mySubject)
   const filtered = mySubject ? allSyl.filter((s: any) => norm(s.subject) === myNorm) : allSyl
   const syllabus = filtered.length ? filtered : allSyl
-  const visIds = new Set(syllabus.map((s: any) => s.id))
-  const myRatings = db.ratings.filter((r: any) => r.candidateId === candidate.id && visIds.has(r.topicId))
-  const statusOf = (nodeId: string, activity: string) => db.progress.find((p: any) => p.candidateId === candidate.id && p.topicId === nodeId && p.activity === activity)?.status || 'Not started'
-  const setStatus = (nodeId: string, activity: string, status: string) => mutate((d: DB) => { const r: any = d.progress.find((p: any) => p.projectId === candidate.projectId && p.candidateId === candidate.id && p.topicId === nodeId && p.activity === activity); if (r) r.status = status; else d.progress.push({ id: uid(), projectId: candidate.projectId, candidateId: candidate.id, topicId: nodeId, activity, status }) })
+  const myRatings = (boot.ratings || []).map((r: any) => ({ topicId: r.node_id, score: r.score, remark: r.remark }))
+  const prog: Record<string, string> = {}; (boot.progress || []).forEach((p: any) => { prog[p.node_id + '|' + p.activity] = p.status })
+  const statusOf = (nodeId: string, activity: string) => prog[nodeId + '|' + activity] || 'Not started'
   const ratingOf = (nodeId: string) => myRatings.find((r: any) => r.topicId === nodeId)
+  const setStatus = async (nodeId: string, activity: string, status: string) => {
+    const { data, error } = await supabase.rpc('pj_set_progress', { p_cid: sess.id, p_email: sess.email, p_pin: sess.pin, p_node: nodeId, p_activity: activity, p_status: status })
+    if (error || !data?.ok) { msg.error('Could not save — ' + (error?.message || 'try again')); return }
+    load()
+  }
   const total = syllabus.length * ACTIVITIES.length
-  const done = db.progress.filter((p: any) => p.candidateId === candidate.id && p.status === 'Completed' && visIds.has(p.topicId)).length
+  const done = Object.entries(prog).filter(([k, v]) => v === 'Completed' && syllabus.some((s: any) => k.startsWith(s.id + '|'))).length
   const pct = total ? Math.round(100 * done / total) : 0
-  const avg = avgRatingOf(myRatings, candidate.id)
-  // build tree: subject → chapter → topic → [rows(sub-topic leaves)]
+  const rs = myRatings.filter((r: any) => r.score != null)
+  const avg = rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null
   const tree: any = {}
   syllabus.forEach((s: any) => { const subj = tree[s.subject] || (tree[s.subject] = {}); const ch = subj[s.chapter] || (subj[s.chapter] = {}); (ch[s.topic] = ch[s.topic] || []).push(s) })
   return <div>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
       <div>
         <div style={{ fontSize: 20, fontWeight: 800 }}>Hi, {candidate.name} 👋</div>
-        <div style={{ fontSize: 13, color: '#9aa1ad' }}>{mySubject || project?.name || 'Subject'}{candidate.batch ? ` · Batch ${candidate.batch}` : ''}</div>
+        <div style={{ fontSize: 13, color: '#9aa1ad' }}>{mySubject || boot.subjectName || 'Subject'}{boot.batchName ? ` · Batch ${boot.batchName}` : ''}</div>
       </div>
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
         <Tooltip title={`${done}/${total || 0} activities completed`}><span style={{ width: 150 }}><Progress percent={pct} size="small" /></span></Tooltip>
@@ -635,8 +650,7 @@ function CandidatePortal({ db, mutate, candidate, onLogout }: any) {
     <Card size="small" title="My syllabus — update your progress" styles={{ body: { padding: 14 } }}>
       {syllabus.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No syllabus yet — your trainer will add it." />
         : <Collapse defaultActiveKey={Object.keys(tree)} items={Object.keys(tree).sort().map((subj) => ({
-          key: subj,
-          label: <b>{subj}</b>,
+          key: subj, label: <b>{subj}</b>,
           children: Object.keys(tree[subj]).sort().map((ch) => (
             <div key={ch} style={{ marginBottom: 10 }}>
               {ch !== '—' && <div style={{ fontSize: 12, color: '#69707d', fontWeight: 700, marginBottom: 6 }}>{ch}</div>}
