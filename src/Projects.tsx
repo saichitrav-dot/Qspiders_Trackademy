@@ -398,20 +398,27 @@ function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
   const pickStudent = (id: string | null) => { setCid(id); setDraft({}); setQuery('') } // reset drafts so one student's remarks never bleed into another
   const save = async () => {
     if (!cid) return
-    const entries = Object.entries(draft)
-    if (!entries.length) { msg.warning('Nothing changed yet.'); return }
-    let touched = 0
-    for (const [k, v] of entries) {
+    const today = dayjs().format('YYYY-MM-DD')
+    const ops = Object.entries(draft).map(([k, v]) => {
       const [nodeId, act] = k.split('|')
       const ex = existing(nodeId, act)
       const score = ('score' in v ? v.score : ex?.score) ?? 0
       const remark = (('remark' in v ? v.remark : ex?.remark) || '').trim() || null
-      if (!ex && !score && !remark) continue
-      if (ex) await upd('pj_rating', ex.id, { score, remark, rated_on: dayjs().format('YYYY-MM-DD') })
-      else await ins('pj_rating', { subject_id: pid, candidate_id: cid, node_id: nodeId, activity: act, score, remark, rated_on: dayjs().format('YYYY-MM-DD') })
-      touched++
-    }
-    setDraft({}); await run(async () => null, touched ? 'Ratings saved' : 'Nothing to save')
+      return { nodeId, act, ex, score, remark }
+    }).filter((o) => o.ex || o.score || o.remark)
+    if (!ops.length) { msg.warning('Set a score or remark first.'); return }
+    // Run all writes through `run` so a real DB error is surfaced (incl. the
+    // "run the migration" hint) and success is only reported when it saved.
+    const ok = await run(async () => {
+      for (const o of ops) {
+        const err = o.ex
+          ? await upd('pj_rating', o.ex.id, { score: o.score, remark: o.remark, rated_on: today })
+          : await ins('pj_rating', { subject_id: pid, candidate_id: cid, node_id: o.nodeId, activity: o.act, score: o.score, remark: o.remark, rated_on: today })
+        if (err) return err
+      }
+      return null
+    }, 'Ratings saved')
+    if (ok) setDraft({})
   }
   const ratedNodes = (id: string) => new Set(ratings.filter((r: any) => r.candidateId === id && r.score != null).map((r: any) => r.topicId)).size
   const summaryCols = [
