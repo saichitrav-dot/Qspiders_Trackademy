@@ -6,7 +6,7 @@
 //   progress; they see only their batch's subject as a Subject→Chapter→Topic→
 //   Sub-topic tree, plus the ratings their trainer gave (read-only).
 // ============================================================================
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef, memo } from 'react'
 import * as XLSX from 'xlsx'
 import {
   Card, Tabs, Table, Tag, Button, Input, Modal, Form, Select, DatePicker, Empty,
@@ -384,41 +384,68 @@ function SyllabusTab({ run, pid, syllabus }: any) {
 // ============================================================================
 // Ratings
 // ============================================================================
+// One sub-topic's 4 activity rows. Memoised with its own local state so typing
+// or changing a score re-renders ONLY this leaf (not the whole tree), and edits
+// are written to a parent ref (no parent re-render per keystroke).
+const LeafRater = memo(function LeafRater({ leaf, exMap, pending, scoreOpts, onEdit }: any) {
+  const seed = () => {
+    const o: Record<string, { score: number; remark: string }> = {}
+    RATING_ACTIVITIES.forEach((act) => {
+      const k = leaf.id + '|' + act; const p = pending.current[k]; const ex = exMap[k]
+      o[act] = { score: (p && 'score' in p) ? p.score : (ex?.score ?? 0), remark: (p && 'remark' in p) ? p.remark : (ex?.remark ?? '') }
+    })
+    return o
+  }
+  const [vals, setVals] = useState(seed)
+  const set = (act: string, patch: any) => { setVals((v) => ({ ...v, [act]: { ...v[act], ...patch } })); onEdit(leaf.id + '|' + act, patch) }
+  return (
+    <div style={{ border: '1px solid #eef0f3', borderRadius: 8, padding: '8px 10px', marginBottom: 6, marginLeft: 12 }}>
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>{leafLabel(leaf)}</div>
+      {RATING_ACTIVITIES.map((act) => (
+        <div key={act} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <span style={{ fontSize: 12, color: '#69707d', width: 92, flexShrink: 0 }}>{act}</span>
+          <Select size="small" value={vals[act].score} onChange={(v) => set(act, { score: v })} style={{ width: 78, flexShrink: 0 }} options={scoreOpts} />
+          <Input size="small" placeholder="Remark" value={vals[act].remark} onChange={(e) => set(act, { remark: e.target.value })} style={{ flex: 1 }} />
+        </div>
+      ))}
+    </div>
+  )
+})
+
 function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
   const { message: msg } = AntApp.useApp()
   const [cid, setCid] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  // drafts are keyed by `${nodeId}|${activity}` and scoped to the picked student only
-  const [draft, setDraft] = useState<Record<string, { score?: number; remark?: string }>>({})
-  const kOf = (nodeId: string, act: string) => `${nodeId}|${act}`
-  const existing = (nodeId: string, act: string) => ratings.find((r: any) => r.candidateId === cid && r.topicId === nodeId && (r.activity || '') === act)
-  const curScore = (nodeId: string, act: string) => { const d = draft[kOf(nodeId, act)]; return d && 'score' in d ? d.score ?? 0 : existing(nodeId, act)?.score ?? 0 }
-  const curRemark = (nodeId: string, act: string) => { const d = draft[kOf(nodeId, act)]; return d && 'remark' in d ? d.remark ?? '' : existing(nodeId, act)?.remark ?? '' }
-  const setField = (nodeId: string, act: string, patch: any) => setDraft((d) => ({ ...d, [kOf(nodeId, act)]: { ...d[kOf(nodeId, act)], ...patch } }))
-  const pickStudent = (id: string | null) => { setCid(id); setDraft({}); setQuery('') } // reset drafts so one student's remarks never bleed into another
+  // pending edits live in a ref (keyed `${nodeId}|${activity}`) so editing never re-renders the parent
+  const pending = useRef<Record<string, { score?: number; remark?: string }>>({})
+  // O(1) lookup of the picked student's existing ratings (avoids scanning the array per control)
+  const exMap = useMemo(() => {
+    const m: Record<string, any> = {}
+    ;(ratings as any[]).forEach((r) => { if (r.candidateId === cid) m[r.topicId + '|' + (r.activity || '')] = r })
+    return m
+  }, [ratings, cid])
+  const onEdit = useCallback((key: string, patch: any) => { pending.current[key] = { ...pending.current[key], ...patch } }, [])
+  const pickStudent = (id: string | null) => { setCid(id); pending.current = {}; setQuery('') } // reset edits so one student's remarks never bleed into another
   const save = async () => {
     if (!cid) return
     const today = dayjs().format('YYYY-MM-DD')
-    const ops = Object.entries(draft).map(([k, v]) => {
+    const ops = Object.entries(pending.current).map(([k, v]) => {
       const [nodeId, act] = k.split('|')
-      const ex = existing(nodeId, act)
+      const ex = exMap[k]
       const score = ('score' in v ? v.score : ex?.score) ?? 0
       const remark = (('remark' in v ? v.remark : ex?.remark) || '').trim() || null
       return { nodeId, act, ex, score, remark }
     }).filter((o) => o.ex || o.score || o.remark)
     if (!ops.length) { msg.warning('Set a score or remark first.'); return }
-    // Run all writes through `run` so a real DB error is surfaced (incl. the
-    // "run the migration" hint) and success is only reported when it saved.
+    // Writes run in parallel (one round-trip), through `run` so a real DB error
+    // is surfaced (incl. the "run the migration" hint) and success only on save.
     const ok = await run(async () => {
-      for (const o of ops) {
-        const err = o.ex
-          ? await upd('pj_rating', o.ex.id, { score: o.score, remark: o.remark, rated_on: today })
-          : await ins('pj_rating', { subject_id: pid, candidate_id: cid, node_id: o.nodeId, activity: o.act, score: o.score, remark: o.remark, rated_on: today })
-        if (err) return err
-      }
-      return null
+      const errs = await Promise.all(ops.map((o) => o.ex
+        ? upd('pj_rating', o.ex.id, { score: o.score, remark: o.remark, rated_on: today })
+        : ins('pj_rating', { subject_id: pid, candidate_id: cid, node_id: o.nodeId, activity: o.act, score: o.score, remark: o.remark, rated_on: today })))
+      return errs.find((e) => e) || null
     }, 'Ratings saved')
-    if (ok) setDraft({})
+    if (ok) pending.current = {}
   }
   const ratedNodes = (id: string) => new Set(ratings.filter((r: any) => r.candidateId === id && r.score != null).map((r: any) => r.topicId)).size
   const summaryCols = [
@@ -431,7 +458,7 @@ function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
   ]
   const shown = matchRows(syllabus, query)
   const tree = buildTree(shown)
-  const scoreOpts = SCORES.map((n) => ({ value: n, label: n === 0 ? '—' : `${n}` }))
+  const scoreOpts = useMemo(() => SCORES.map((n) => ({ value: n, label: n === 0 ? '—' : `${n}` })), [])
   return <Row gutter={16}>
     <Col xs={24} lg={11}>
       <Card size="small" title="Students — ratings summary" styles={{ body: { padding: 12 } }}>
@@ -448,7 +475,7 @@ function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
               <Input allowClear size="small" prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search topic / sub-topic" value={query} onChange={(e) => setQuery(e.target.value)} style={{ marginBottom: 10 }} />
               {shown.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span>No topic or sub-topic matches “{query}”.</span>} />
                 : <div style={{ maxHeight: 440, overflowY: 'auto' }}>
-                  <Collapse key={query} defaultActiveKey={tree.map((t: any) => t.subject)} items={tree.map((node: any) => ({
+                  <Collapse key={query} defaultActiveKey={query.trim() ? tree.map((t: any) => t.subject) : []} items={tree.map((node: any) => ({
                     key: node.subject, label: <b>{node.subject}</b>,
                     children: node.chapters.map((chNode: any, ci: number) => (
                       <div key={ci} style={{ marginBottom: 8 }}>
@@ -457,16 +484,7 @@ function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
                           <div key={ti} style={{ marginLeft: chNode.chapter !== '—' ? 12 : 0, marginBottom: 8 }}>
                             <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{tpNode.topic}</div>
                             {tpNode.leaves.map((s: any) => (
-                              <div key={s.id} style={{ border: '1px solid #eef0f3', borderRadius: 8, padding: '8px 10px', marginBottom: 6, marginLeft: 12 }}>
-                                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>{leafLabel(s)}</div>
-                                {RATING_ACTIVITIES.map((act) => (
-                                  <div key={act} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                                    <span style={{ fontSize: 12, color: '#69707d', width: 92, flexShrink: 0 }}>{act}</span>
-                                    <Select size="small" value={curScore(s.id, act)} onChange={(v) => setField(s.id, act, { score: v })} style={{ width: 78, flexShrink: 0 }} options={scoreOpts} />
-                                    <Input size="small" placeholder="Remark" value={curRemark(s.id, act)} onChange={(e) => setField(s.id, act, { remark: e.target.value })} style={{ flex: 1 }} />
-                                  </div>
-                                ))}
-                              </div>
+                              <LeafRater key={s.id} leaf={s} exMap={exMap} pending={pending} scoreOpts={scoreOpts} onEdit={onEdit} />
                             ))}
                           </div>
                         ))}
