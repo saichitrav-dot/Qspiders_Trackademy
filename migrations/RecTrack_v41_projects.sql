@@ -38,6 +38,11 @@ create sequence if not exists pj_syllabus_ord_seq;
 alter table pj_syllabus add column if not exists ord bigint default nextval('pj_syllabus_ord_seq');
 create index if not exists ix_pj_syl_ord on pj_syllabus(subject_id, ord);
 
+-- trainers/mentors rate each sub-topic per activity (Presentation / Assignment /
+-- Assessment / Mock Test); a rating row is keyed by (candidate, node, activity).
+alter table pj_rating add column if not exists activity text;
+create index if not exists ix_pj_rating_node on pj_rating(candidate_id, node_id, activity);
+
 -- ---------- RLS: signed-in staff manage everything; anon has NO direct table access ----------
 do $$ declare t text; begin
   foreach t in array array['pj_org','pj_subject','pj_batch','pj_candidate','pj_syllabus','pj_rating','pj_attendance','pj_deployment','pj_progress'] loop

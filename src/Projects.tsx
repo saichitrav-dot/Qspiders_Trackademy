@@ -21,6 +21,9 @@ import dayjs from 'dayjs'
 import { supabase } from './supabase'
 
 const ACTIVITIES = ['Videos', 'Presentation', 'Assignment', 'Assessment', 'Mock Test']
+// Trainer/mentor rates these activities per sub-topic (Videos is student self-progress only).
+const RATING_ACTIVITIES = ['Presentation', 'Assignment', 'Assessment', 'Mock Test']
+const SCORES = [0, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]
 const ACT_STATUS = ['Not started', 'In progress', 'Completed']
 const DEP_STATUSES = ['Profiles shared', 'Interview in Progress', 'Waiting for results', 'Shortlisted', 'Not Shortlisted', 'Rejected', 'Deployed']
 const DEP_COLOR: Record<string, string> = { 'Profiles shared': 'blue', 'Interview in Progress': 'gold', 'Waiting for results': 'orange', 'Shortlisted': 'green', 'Not Shortlisted': 'volcano', 'Rejected': 'red', 'Deployed': 'purple' }
@@ -31,6 +34,20 @@ const leafLabel = (s: any) => (s.subtopic && s.subtopic !== '—') ? s.subtopic 
 const nodePath = (s: any) => [s.subject, s.chapter, s.topic, s.subtopic].filter((x: string) => x && x !== '—').join(' › ')
 const candName = (candidates: any[], id: string) => candidates.find((c) => c.id === id)?.name || '—'
 const avgRatingOf = (ratings: any[], candidateId: string) => { const rs = ratings.filter((r) => r.candidateId === candidateId && r.score != null); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null }
+// Build the Subject → Chapter → Topic → Sub-topic tree, preserving uploaded sheet order.
+function buildTree(rows: any[]) {
+  const pick = (arr: any[], key: string, make: () => any) => { let n = arr.find((x) => x._k === key); if (!n) { n = make(); n._k = key; arr.push(n) } return n }
+  const tree: any[] = []
+  rows.forEach((s) => {
+    const subj = pick(tree, s.subject, () => ({ subject: s.subject, chapters: [] }))
+    const ch = pick(subj.chapters, s.chapter, () => ({ chapter: s.chapter, topics: [] }))
+    const tp = pick(ch.topics, s.topic, () => ({ topic: s.topic, leaves: [] }))
+    tp.leaves.push(s)
+  })
+  return tree
+}
+// Rows whose topic/sub-topic text matches a search query (case-insensitive).
+const matchRows = (rows: any[], q: string) => { const ql = q.trim().toLowerCase(); return ql ? rows.filter((s) => (`${s.topic || ''} ${s.subtopic || ''}`).toLowerCase().includes(ql)) : rows }
 const MISSING = /relation .*pj_|does not exist|schema cache|function pj_/i
 const needV41 = (e: any) => e && MISSING.test(e.message || '')
 
@@ -51,7 +68,7 @@ async function loadAll(): Promise<{ db: DB; err: any }> {
       batches,
       candidates: (c.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, batchId: x.batch_id, name: x.name, email: x.email, contact: x.contact, pin: x.pin, batch: bn(x.batch_id) })),
       syllabus: (sy.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, subject: x.subject, chapter: x.chapter, topic: x.topic, subtopic: x.subtopic })),
-      ratings: (r.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, topicId: x.node_id, score: x.score, remark: x.remark, date: x.rated_on })),
+      ratings: (r.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, topicId: x.node_id, activity: x.activity || '', score: x.score, remark: x.remark, date: x.rated_on })),
       attendance: (a.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, date: x.att_date, status: x.status })),
       deployments: (d.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, company: x.company, status: x.status, remark: x.remark, date: x.dep_date })),
       progress: (p.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, topicId: x.node_id, activity: x.activity, status: x.status })),
@@ -370,50 +387,86 @@ function SyllabusTab({ run, pid, syllabus }: any) {
 function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
   const { message: msg } = AntApp.useApp()
   const [cid, setCid] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  // drafts are keyed by `${nodeId}|${activity}` and scoped to the picked student only
   const [draft, setDraft] = useState<Record<string, { score?: number; remark?: string }>>({})
-  const existing = (candidateId: string, nodeId: string) => ratings.find((r: any) => r.candidateId === candidateId && r.topicId === nodeId)
+  const kOf = (nodeId: string, act: string) => `${nodeId}|${act}`
+  const existing = (nodeId: string, act: string) => ratings.find((r: any) => r.candidateId === cid && r.topicId === nodeId && (r.activity || '') === act)
+  const curScore = (nodeId: string, act: string) => { const d = draft[kOf(nodeId, act)]; return d && 'score' in d ? d.score ?? 0 : existing(nodeId, act)?.score ?? 0 }
+  const curRemark = (nodeId: string, act: string) => { const d = draft[kOf(nodeId, act)]; return d && 'remark' in d ? d.remark ?? '' : existing(nodeId, act)?.remark ?? '' }
+  const setField = (nodeId: string, act: string, patch: any) => setDraft((d) => ({ ...d, [kOf(nodeId, act)]: { ...d[kOf(nodeId, act)], ...patch } }))
+  const pickStudent = (id: string | null) => { setCid(id); setDraft({}); setQuery('') } // reset drafts so one student's remarks never bleed into another
   const save = async () => {
     if (!cid) return
-    const entries = Object.entries(draft).filter(([, v]) => v.score != null)
-    if (!entries.length) { msg.warning('Set at least one score.'); return }
-    for (const [nodeId, v] of entries) {
-      const ex = existing(cid, nodeId)
-      if (ex) await upd('pj_rating', ex.id, { score: v.score, remark: v.remark ?? ex.remark, rated_on: dayjs().format('YYYY-MM-DD') })
-      else await ins('pj_rating', { subject_id: pid, candidate_id: cid, node_id: nodeId, score: v.score, remark: v.remark || null, rated_on: dayjs().format('YYYY-MM-DD') })
+    const entries = Object.entries(draft)
+    if (!entries.length) { msg.warning('Nothing changed yet.'); return }
+    let touched = 0
+    for (const [k, v] of entries) {
+      const [nodeId, act] = k.split('|')
+      const ex = existing(nodeId, act)
+      const score = ('score' in v ? v.score : ex?.score) ?? 0
+      const remark = (('remark' in v ? v.remark : ex?.remark) || '').trim() || null
+      if (!ex && !score && !remark) continue
+      if (ex) await upd('pj_rating', ex.id, { score, remark, rated_on: dayjs().format('YYYY-MM-DD') })
+      else await ins('pj_rating', { subject_id: pid, candidate_id: cid, node_id: nodeId, activity: act, score, remark, rated_on: dayjs().format('YYYY-MM-DD') })
+      touched++
     }
-    setDraft({}); await run(async () => null, 'Ratings saved')
+    setDraft({}); await run(async () => null, touched ? 'Ratings saved' : 'Nothing to save')
   }
+  const ratedNodes = (id: string) => new Set(ratings.filter((r: any) => r.candidateId === id && r.score != null).map((r: any) => r.topicId)).size
   const summaryCols = [
     slCol,
     { title: 'Student', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
     { title: 'Batch', dataIndex: 'batch', width: 120, render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
-    { title: 'Rated', width: 110, render: (_: any, c: any) => <span>{ratings.filter((r: any) => r.candidateId === c.id).length} / {syllabus.length}</span> },
+    { title: 'Rated', width: 110, render: (_: any, c: any) => <span>{ratedNodes(c.id)} / {syllabus.length}</span> },
     { title: 'Average', width: 120, render: (_: any, c: any) => { const a = avgRatingOf(ratings, c.id); return a == null ? <span style={{ color: '#9aa1ad' }}>—</span> : <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'}>{a.toFixed(2)} / 5</Tag> } },
-    { title: '', width: 90, render: (_: any, c: any) => <Button size="small" onClick={() => { setCid(c.id); setDraft({}) }}>Rate</Button> },
+    { title: '', width: 90, render: (_: any, c: any) => <Button size="small" onClick={() => pickStudent(c.id)}>Rate</Button> },
   ]
+  const shown = matchRows(syllabus, query)
+  const tree = buildTree(shown)
+  const scoreOpts = SCORES.map((n) => ({ value: n, label: n === 0 ? '—' : `${n}` }))
   return <Row gutter={16}>
-    <Col xs={24} lg={13}>
+    <Col xs={24} lg={11}>
       <Card size="small" title="Students — ratings summary" styles={{ body: { padding: 12 } }}>
         <Table size="small" rowKey="id" columns={summaryCols as any} dataSource={candidates} pagination={{ pageSize: 12 }} locale={{ emptyText: <Empty description="Add students first" /> }} />
       </Card>
     </Col>
-    <Col xs={24} lg={11}>
+    <Col xs={24} lg={13}>
       <Card size="small" styles={{ body: { padding: 12 } }}
-        title={<span>Rate node-wise{cid ? <> — <b>{candName(candidates, cid)}</b></> : ''}</span>}
-        extra={<Select placeholder="Pick student" value={cid} onChange={(v) => { setCid(v); setDraft({}) }} style={{ minWidth: 180 }} options={candidates.map((c: any) => ({ value: c.id, label: c.name }))} />}>
+        title={<span>Rate by sub-topic{cid ? <> — <b>{candName(candidates, cid)}</b></> : ''}</span>}
+        extra={<Select showSearch optionFilterProp="label" placeholder="Pick student" value={cid} onChange={pickStudent} style={{ minWidth: 190 }} options={candidates.map((c: any) => ({ value: c.id, label: c.name }))} />}>
         {!cid ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Pick a student to rate" />
           : syllabus.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Add syllabus first" />
-            : <div style={{ maxHeight: 460, overflowY: 'auto' }}>
-              {syllabus.map((s: any) => {
-                const ex = existing(cid, s.id); const cur = draft[s.id]?.score ?? ex?.score ?? 0
-                return <div key={s.id} style={{ borderBottom: '1px solid #f0f0f0', padding: '8px 0' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 12 }}>{nodePath(s)}</span>
-                    <Select size="small" value={cur} onChange={(v) => setDraft((d) => ({ ...d, [s.id]: { ...d[s.id], score: v } }))} style={{ width: 90 }} options={[0, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5].map((n) => ({ value: n, label: n === 0 ? '—' : `${n}` }))} />
-                  </div>
-                  <Input size="small" placeholder="Remark (optional)" defaultValue={ex?.remark} onChange={(e) => setDraft((d) => ({ ...d, [s.id]: { ...d[s.id], remark: e.target.value } }))} style={{ marginTop: 6 }} />
-                </div>
-              })}
+            : <div key={cid}>
+              <Input allowClear size="small" prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search topic / sub-topic" value={query} onChange={(e) => setQuery(e.target.value)} style={{ marginBottom: 10 }} />
+              {shown.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span>No topic or sub-topic matches “{query}”.</span>} />
+                : <div style={{ maxHeight: 440, overflowY: 'auto' }}>
+                  <Collapse key={query} defaultActiveKey={tree.map((t: any) => t.subject)} items={tree.map((node: any) => ({
+                    key: node.subject, label: <b>{node.subject}</b>,
+                    children: node.chapters.map((chNode: any, ci: number) => (
+                      <div key={ci} style={{ marginBottom: 8 }}>
+                        {chNode.chapter !== '—' && <div style={{ fontSize: 12, color: '#69707d', fontWeight: 700, marginBottom: 6 }}>{chNode.chapter}</div>}
+                        {chNode.topics.map((tpNode: any, ti: number) => (
+                          <div key={ti} style={{ marginLeft: chNode.chapter !== '—' ? 12 : 0, marginBottom: 8 }}>
+                            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{tpNode.topic}</div>
+                            {tpNode.leaves.map((s: any) => (
+                              <div key={s.id} style={{ border: '1px solid #eef0f3', borderRadius: 8, padding: '8px 10px', marginBottom: 6, marginLeft: 12 }}>
+                                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>{leafLabel(s)}</div>
+                                {RATING_ACTIVITIES.map((act) => (
+                                  <div key={act} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                                    <span style={{ fontSize: 12, color: '#69707d', width: 92, flexShrink: 0 }}>{act}</span>
+                                    <Select size="small" value={curScore(s.id, act)} onChange={(v) => setField(s.id, act, { score: v })} style={{ width: 78, flexShrink: 0 }} options={scoreOpts} />
+                                    <Input size="small" placeholder="Remark" value={curRemark(s.id, act)} onChange={(e) => setField(s.id, act, { remark: e.target.value })} style={{ flex: 1 }} />
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )),
+                  }))} />
+                </div>}
               <Button type="primary" block style={{ marginTop: 12 }} onClick={save}>Save ratings</Button>
             </div>}
       </Card>
@@ -444,7 +497,8 @@ function ProgressTab({ candidates, syllabus, progress, ratings }: any) {
       {ratingList.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ratings given yet" />
         : <Table size="small" rowKey="id" pagination={false} dataSource={ratingList} columns={[
           { title: 'Topic', dataIndex: 'path' },
-          { title: 'Score', dataIndex: 'score', width: 100, render: (v: number) => <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v} / 5</Tag> },
+          { title: 'Activity', dataIndex: 'activity', width: 120, render: (v: string) => <Tag>{v || 'Overall'}</Tag> },
+          { title: 'Score', dataIndex: 'score', width: 90, render: (v: number) => <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v} / 5</Tag> },
           { title: 'Remark', dataIndex: 'remark', render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
         ] as any} />}
     </Modal>
@@ -621,10 +675,11 @@ function CandidatePortal({ sess, onLogout }: any) {
   const myNorm = norm(mySubject)
   const filtered = mySubject ? allSyl.filter((s: any) => norm(s.subject) === myNorm) : allSyl
   const syllabus = filtered.length ? filtered : allSyl
-  const myRatings = (boot.ratings || []).map((r: any) => ({ topicId: r.node_id, score: r.score, remark: r.remark }))
+  const myRatings = (boot.ratings || []).map((r: any) => ({ topicId: r.node_id, activity: r.activity || '', score: r.score, remark: r.remark }))
   const prog: Record<string, string> = {}; (boot.progress || []).forEach((p: any) => { prog[p.node_id + '|' + p.activity] = p.status })
   const statusOf = (nodeId: string, activity: string) => prog[nodeId + '|' + activity] || 'Not started'
-  const ratingOf = (nodeId: string) => myRatings.find((r: any) => r.topicId === nodeId)
+  const ratingsFor = (nodeId: string) => myRatings.filter((r: any) => r.topicId === nodeId && r.score != null)
+  const scoreFor = (nodeId: string, activity: string) => { const r = myRatings.find((x: any) => x.topicId === nodeId && (x.activity || '') === activity && x.score != null); return r ? r.score : null }
   const setStatus = async (nodeId: string, activity: string, status: string) => {
     const { data, error } = await supabase.rpc('pj_set_progress', { p_cid: sess.id, p_email: sess.email, p_pin: sess.pin, p_node: nodeId, p_activity: activity, p_status: status })
     if (error || !data?.ok) { msg.error('Could not save — ' + (error?.message || 'try again')); return }
@@ -635,18 +690,10 @@ function CandidatePortal({ sess, onLogout }: any) {
   const pct = total ? Math.round(100 * done / total) : 0
   const rs = myRatings.filter((r: any) => r.score != null)
   const avg = rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null
-  // Build the tree preserving the uploaded sheet's exact order (first-seen),
-  // never alphabetical: Subject → Chapter → Topic → Sub-topic leaves.
-  const pick = (arr: any[], key: string, make: () => any) => { let n = arr.find((x) => x._k === key); if (!n) { n = make(); n._k = key; arr.push(n) } return n }
+  // Tree preserves the uploaded sheet's exact order (Subject → Chapter → Topic → Sub-topic).
   const ql = query.trim().toLowerCase()
-  const shown = ql ? syllabus.filter((s: any) => (`${s.topic || ''} ${s.subtopic || ''}`).toLowerCase().includes(ql)) : syllabus
-  const tree: any[] = []
-  shown.forEach((s: any) => {
-    const subj = pick(tree, s.subject, () => ({ subject: s.subject, chapters: [] }))
-    const ch = pick(subj.chapters, s.chapter, () => ({ chapter: s.chapter, topics: [] }))
-    const tp = pick(ch.topics, s.topic, () => ({ topic: s.topic, leaves: [] }))
-    tp.leaves.push(s)
-  })
+  const shown = matchRows(syllabus, query)
+  const tree = buildTree(shown)
   return <div>
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
       <div>
@@ -672,19 +719,20 @@ function CandidatePortal({ sess, onLogout }: any) {
               {chNode.topics.map((tpNode: any, ti: number) => (
                 <div key={ti} style={{ marginLeft: chNode.chapter !== '—' ? 12 : 0, marginBottom: 8 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{tpNode.topic}</div>
-                  {tpNode.leaves.map((s: any) => { const r = ratingOf(s.id); return (
+                  {tpNode.leaves.map((s: any) => { const rrows = ratingsFor(s.id); const lavg = rrows.length ? rrows.reduce((a: number, b: any) => a + Number(b.score), 0) / rrows.length : null; const remarks = rrows.filter((r: any) => r.remark); return (
                     <div key={s.id} style={{ border: '1px solid #eef0f3', borderRadius: 8, padding: '8px 10px', marginBottom: 6, marginLeft: 12 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                         <span style={{ fontWeight: 600, fontSize: 13 }}>{leafLabel(s)}</span>
-                        {r ? <Tag color={r.score >= 4 ? 'green' : r.score >= 3 ? 'orange' : 'red'}>Trainer: {r.score}/5</Tag> : <span style={{ fontSize: 11, color: '#c8ccd4' }}>Not rated</span>}
+                        {lavg != null ? <Tag color={lavg >= 4 ? 'green' : lavg >= 3 ? 'orange' : 'red'}>Trainer avg {lavg.toFixed(1)}/5</Tag> : <span style={{ fontSize: 11, color: '#c8ccd4' }}>Not rated</span>}
                       </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                        {ACTIVITIES.map((a) => <span key={a} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                        {ACTIVITIES.map((a) => { const ts = scoreFor(s.id, a); return <span key={a} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                           <span style={{ fontSize: 11, color: '#69707d' }}>{a}</span>
-                          <Select size="small" value={statusOf(s.id, a)} onChange={(v) => setStatus(s.id, a, v)} style={{ width: 120 }} options={ACT_STATUS.map((x) => ({ value: x, label: x }))} />
-                        </span>)}
+                          <Select size="small" value={statusOf(s.id, a)} onChange={(v) => setStatus(s.id, a, v)} style={{ width: 118 }} options={ACT_STATUS.map((x) => ({ value: x, label: x }))} />
+                          {ts != null && <Tag color={ts >= 4 ? 'green' : ts >= 3 ? 'orange' : 'red'} style={{ marginInlineEnd: 0, fontSize: 10 }}>★{ts}</Tag>}
+                        </span> })}
                       </div>
-                      {r?.remark && <div style={{ fontSize: 11, color: '#69707d', marginTop: 6 }}>Trainer remark: {r.remark}</div>}
+                      {remarks.length > 0 && <div style={{ fontSize: 11, color: '#69707d', marginTop: 6 }}>{remarks.map((r: any) => <div key={r.activity}><b>{r.activity || 'Overall'}:</b> {r.remark}</div>)}</div>}
                     </div>
                   ) })}
                 </div>
