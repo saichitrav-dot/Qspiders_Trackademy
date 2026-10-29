@@ -108,7 +108,7 @@ async function loadAll(): Promise<{ db: DB; err: any }> {
       candidates: (c.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, batchId: x.batch_id, name: x.name, email: x.email, contact: x.contact, pin: x.pin, batch: bn(x.batch_id) })),
       syllabus: (sy.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, subject: x.subject, chapter: x.chapter, topic: x.topic, subtopic: x.subtopic })),
       ratings: (r.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, topicId: x.node_id, activity: x.activity || '', score: x.score, remark: x.remark, date: x.rated_on })),
-      attendance: (a.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, date: x.att_date, status: x.status })),
+      attendance: (a.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, date: x.att_date, status: x.status, remark: x.remark || '' })),
       deployments: (d.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, company: x.company, status: x.status, remark: x.remark, date: x.dep_date })),
       progress: (p.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, topicId: x.node_id, activity: x.activity, status: x.status })),
     },
@@ -406,6 +406,7 @@ function AttendanceTab({ run, pid, batches, candidates, attendance }: any) {
   const dstr = date.format('YYYY-MM-DD')
   const recOf = (cid: string) => attendance.find((a: any) => a.candidateId === cid && a.date === dstr)
   const setStatus = async (cid: string, status: string) => { const rec = recOf(cid); await run(() => rec ? upd('pj_attendance', rec.id, { status }) : ins('pj_attendance', { subject_id: pid, candidate_id: cid, att_date: dstr, status })) }
+  const setRemark = async (cid: string, remark: string) => { const rec = recOf(cid); const r = remark.trim() || null; if (!rec && !r) return; await run(() => rec ? upd('pj_attendance', rec.id, { remark: r }) : ins('pj_attendance', { subject_id: pid, candidate_id: cid, att_date: dstr, remark: r })) }
   const markAll = async (status: string) => { for (const c of shown) { const rec = recOf(c.id); await (rec ? upd('pj_attendance', rec.id, { status }) : ins('pj_attendance', { subject_id: pid, candidate_id: c.id, att_date: dstr, status })) } await run(async () => null, `All marked ${status}`); msg.destroy() }
   const pct = (cid: string) => { const recs = attendance.filter((a: any) => a.candidateId === cid); if (!recs.length) return null; return Math.round(100 * recs.filter((r: any) => r.status === 'Present' || r.status === 'Late').length / recs.length) }
   const shown = candidates.filter((c: any) => !bf || c.batchId === bf)
@@ -413,8 +414,9 @@ function AttendanceTab({ run, pid, batches, candidates, attendance }: any) {
     slCol,
     { title: 'Student', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
     { title: 'Batch', dataIndex: 'batch', width: 130, render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
-    { title: `Status · ${date.format('DD MMM YYYY')}`, width: 320, render: (_: any, c: any) => <Segmented size="small" value={recOf(c.id)?.status || ''} onChange={(v) => setStatus(c.id, v as string)} options={ATT_OPTS.map((o) => ({ value: o, label: o }))} /> },
-    { title: 'Overall %', width: 130, render: (_: any, c: any) => { const p = pct(c.id); return p == null ? <span style={{ color: '#9aa1ad' }}>—</span> : <Progress percent={p} size="small" strokeColor={p >= 75 ? '#16a34a' : p >= 50 ? '#d97706' : '#dc2626'} /> } },
+    { title: `Status · ${date.format('DD MMM YYYY')}`, width: 300, render: (_: any, c: any) => <Segmented size="small" value={recOf(c.id)?.status || ''} onChange={(v) => setStatus(c.id, v as string)} options={ATT_OPTS.map((o) => ({ value: o, label: o }))} /> },
+    { title: 'Remark', width: 220, render: (_: any, c: any) => <Input key={dstr + c.id} size="small" placeholder="Note (optional)" defaultValue={recOf(c.id)?.remark} onBlur={(e) => { if ((e.target.value || '') !== (recOf(c.id)?.remark || '')) setRemark(c.id, e.target.value) }} /> },
+    { title: 'Overall %', width: 120, render: (_: any, c: any) => { const p = pct(c.id); return p == null ? <span style={{ color: '#9aa1ad' }}>—</span> : <Progress percent={p} size="small" strokeColor={p >= 75 ? '#16a34a' : p >= 50 ? '#d97706' : '#dc2626'} /> } },
   ]
   return <Card styles={{ body: { padding: 16 } }}>
     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12, alignItems: 'center' }}>
