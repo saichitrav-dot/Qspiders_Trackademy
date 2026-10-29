@@ -75,10 +75,27 @@ const needV41 = (e: any) => e && MISSING.test(e.message || '')
 
 // ---------- data access (Supabase) ----------
 type DB = { orgs: any[]; projects: any[]; batches: any[]; candidates: any[]; syllabus: any[]; ratings: any[]; attendance: any[]; deployments: any[]; progress: any[] }
+// Page past PostgREST's 1000-row cap, so large courses/ratings all load.
+async function pageAll(table: string, orders: { col: string; opts?: any }[]): Promise<{ data: any[]; error: any }> {
+  const PAGE = 1000; let from = 0; const out: any[] = []
+  for (;;) {
+    let q = supabase.from(table).select('*')
+    orders.forEach((o) => { q = q.order(o.col, o.opts) })
+    const { data, error } = await q.range(from, from + PAGE - 1)
+    if (error) return { data: out, error }
+    out.push(...(data || []))
+    if (!data || data.length < PAGE) break
+    from += PAGE
+  }
+  return { data: out, error: null }
+}
 async function loadAll(): Promise<{ db: DB; err: any }> {
-  const q = (t: string) => supabase.from(t).select('*')
-  const qSyl = () => supabase.from('pj_syllabus').select('*').order('ord', { ascending: true, nullsFirst: false }).order('id', { ascending: true })
-  const [o, s, b, c, sy, r, a, d, p] = await Promise.all([q('pj_org'), q('pj_subject'), q('pj_batch'), q('pj_candidate'), qSyl(), q('pj_rating'), q('pj_attendance'), q('pj_deployment'), q('pj_progress')])
+  const byId = [{ col: 'id' }]
+  const [o, s, b, c, sy, r, a, d, p] = await Promise.all([
+    pageAll('pj_org', byId), pageAll('pj_subject', byId), pageAll('pj_batch', byId), pageAll('pj_candidate', byId),
+    pageAll('pj_syllabus', [{ col: 'ord', opts: { ascending: true, nullsFirst: false } }, { col: 'id', opts: { ascending: true } }]),
+    pageAll('pj_rating', byId), pageAll('pj_attendance', byId), pageAll('pj_deployment', byId), pageAll('pj_progress', byId),
+  ])
   const err = [o, s, b, c, sy, r, a, d, p].find((x) => x.error)?.error
   const batches = (b.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, name: x.name, subject: x.covers || '' }))
   const bn = (id: string) => batches.find((x: any) => x.id === id)?.name || ''
