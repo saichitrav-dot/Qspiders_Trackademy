@@ -119,6 +119,65 @@ export default function Projects() {
 }
 
 // ============================================================================
+// Subject performance — which Subject's candidates are doing best (by rating)
+// ============================================================================
+function SubjectPerformanceDashboard({ db, onOpen }: any) {
+  const rows = db.projects.map((p: any) => {
+    const cands = db.candidates.filter((c: any) => c.projectId === p.id)
+    const candAvgs = cands.map((c: any) => avgRatingOf(db.ratings, c.id)).filter((a: any) => a != null) as number[]
+    const avg = candAvgs.length ? candAvgs.reduce((a, b) => a + b, 0) / candAvgs.length : null
+    const org = db.orgs.find((o: any) => o.id === p.orgId)?.name || ''
+    const sylCount = db.syllabus.filter((s: any) => s.projectId === p.id).length
+    const possible = cands.length * sylCount * ACTIVITIES.length
+    const done = db.progress.filter((pr: any) => pr.projectId === p.id && pr.status === 'Completed' && ACTIVITIES.includes(pr.activity)).length
+    const comp = possible ? Math.round(100 * done / possible) : 0
+    return { id: p.id, name: p.name, org, nCand: cands.length, nRated: candAvgs.length, avg, comp }
+  }).filter((r: any) => r.nCand > 0)
+  if (!rows.length) return null
+  const ranked = [...rows].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1))
+  const rated = ranked.filter((r: any) => r.avg != null)
+  const totalCand = rows.reduce((a: number, b: any) => a + b.nCand, 0)
+  const barColor = (a: number) => a >= 4 ? '#16a34a' : a >= 3 ? '#d97706' : '#dc2626'
+  const tagColor = (a: number) => a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'
+  return <Card style={{ marginBottom: 16 }} styles={{ body: { padding: 16 } }}
+    title={<span><DashboardOutlined style={{ color: PRIMARY, marginRight: 8 }} />Subject performance</span>}
+    extra={<span style={{ fontSize: 12, color: '#9aa1ad' }}>Ranked by candidates' average rating</span>}>
+    {rated.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ratings yet — rate candidates to compare subjects." />
+      : <>
+        <Row gutter={12} style={{ marginBottom: 14 }}>
+          <Col xs={24} md={10}>
+            <div style={{ background: 'linear-gradient(135deg,#fff7ed,#ffedd5)', border: '1px solid #fed7aa', borderRadius: 10, padding: 14, height: '100%' }}>
+              <div style={{ fontSize: 11, color: '#9a6b3f', fontWeight: 800, letterSpacing: 0.4 }}>🏆 TOP PERFORMING SUBJECT</div>
+              <div style={{ fontSize: 20, fontWeight: 800, marginTop: 4 }}>{rated[0].name}</div>
+              <div style={{ fontSize: 12, color: '#9aa1ad' }}>{rated[0].org} · {rated[0].nCand} candidate{rated[0].nCand === 1 ? '' : 's'}</div>
+              <Tag color={tagColor(rated[0].avg)} style={{ marginTop: 8 }}>Avg {rated[0].avg.toFixed(2)} / 5</Tag>
+            </div>
+          </Col>
+          <Col xs={12} md={7}><Stat label="Subjects rated" value={rated.length} color="#0ea5e9" /></Col>
+          <Col xs={12} md={7}><Stat label="Candidates" value={totalCand} color="#7c3aed" /></Col>
+        </Row>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {ranked.map((r: any, i: number) => (
+            <div key={r.id} onClick={() => onOpen?.(r.id)} title="Open subject" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', border: '1px solid #eef0f3', borderRadius: 8, cursor: 'pointer' }}>
+              <span style={{ width: 22, textAlign: 'center', fontWeight: 800, color: i === 0 ? PRIMARY : '#9aa1ad' }}>{i + 1}</span>
+              <div style={{ width: 150, flexShrink: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</div>
+                <div style={{ fontSize: 11, color: '#9aa1ad', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.org}</div>
+              </div>
+              <div style={{ flex: 1, minWidth: 80 }}>
+                {r.avg != null
+                  ? <Progress percent={Math.round(r.avg / 5 * 100)} strokeColor={barColor(r.avg)} format={() => `${r.avg.toFixed(2)}/5`} />
+                  : <span style={{ fontSize: 12, color: '#c8ccd4' }}>Not rated yet</span>}
+              </div>
+              <span style={{ fontSize: 11, color: '#69707d', width: 130, textAlign: 'right', flexShrink: 0 }}>{r.nRated}/{r.nCand} rated · {r.comp}% done</span>
+            </div>
+          ))}
+        </div>
+      </>}
+  </Card>
+}
+
+// ============================================================================
 // Organisations + Subjects landing
 // ============================================================================
 function OrgHome({ db, run, onOpen }: any) {
@@ -138,6 +197,7 @@ function OrgHome({ db, run, onOpen }: any) {
       </div>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => setOrgModal(true)}>Add organisation</Button>
     </div>
+    <SubjectPerformanceDashboard db={db} onOpen={onOpen} />
     {db.orgs.length === 0 ? <Card><Empty description="No organisations yet — add one to get started." /></Card>
       : db.orgs.map((o: any) => (
         <Card key={o.id} style={{ marginBottom: 16 }} styles={{ body: { padding: 16 } }}
