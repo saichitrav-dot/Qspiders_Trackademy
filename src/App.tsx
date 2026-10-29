@@ -3528,6 +3528,13 @@ function MentorGeneration() {
   const bcount: Record<string, number> = {}
   mentors.forEach((m: any) => { const b = mentorBucket(m, activeDeployedSet as Set<string>, returnedSet as Set<string>); bcount[b] = (bcount[b] || 0) + 1 })
   const trainingCount = (bcount.in_training || 0) + (bcount.upskilling || 0)
+  // Mentors currently in Online training (approved online deployment). Shown in the
+  // "Mentor under training" tab as a separate "Online + Under training" group, and
+  // added to the tab's consolidated count.
+  const onlineTrainingSet = new Set(deps.filter((d: any) => d.status === 'approved' && d.deployment_type === 'Online training').map((d: any) => d.mentor_id))
+  const onlineTrainingMentors = mentors.filter((m: any) => onlineTrainingSet.has(m.id))
+  const onlineTrainingCount = onlineTrainingMentors.length
+  const trainingTotal = trainingCount + onlineTrainingCount
   const cols = [
     { title: 'Sl No', width: 64, render: (_: any, r: any, i: number) => <span style={{ color: '#9aa1ad' }}>{r._sl ?? i + 1}</span> },
     { title: 'Mentor', render: (_: any, r: any) => <span><Avatar size={24} style={{ background: '#c2410c', marginRight: 8, fontSize: 11 }}>{(r.prep.mentor?.full_name || '?')[0]}</Avatar>{r.prep.mentor?.full_name || '—'}</span> },
@@ -3791,6 +3798,14 @@ function MentorGeneration() {
         { title: '', dataIndex: 'count', width: 24, align: 'right' as const, render: (_: any, r: any) => r.kind === 'flat' ? <span style={{ color: '#c8ccd4', fontSize: 11 }}>›</span> : null },
       ] as any} />
   </Card>
+  const onlineTrainingCard = onlineTrainingMentors.length > 0 && <Card size="small" style={{ marginBottom: 16 }} styles={{ body: { padding: 0 } }}
+    title={<span style={{ fontSize: 13 }}><Tag color="purple" style={{ fontWeight: 700 }}>Online + Under training</Tag> <span style={{ color: '#9aa1ad', fontWeight: 400 }}>— {onlineTrainingCount} candidate{onlineTrainingCount === 1 ? '' : 's'} currently in online training</span></span>}>
+    <Table size="small" rowKey="id" pagination={false} showHeader={false} dataSource={withSl(onlineTrainingMentors)}
+      columns={[
+        { title: 'Mentor', render: (_: any, m: any) => { const subs = mentorSubjects[m.id] ? orderSubs([...mentorSubjects[m.id]]) : []; return <span style={{ fontSize: 13 }}><span style={{ color: '#9aa1ad', marginRight: 6 }}>{m._sl}.</span><b>{m.full_name}</b>{m.employee_id ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad', marginLeft: 8 }}>{m.employee_id}</span> : null}{subs.length ? <span style={{ display: 'block', fontSize: 11, color: '#9aa1ad' }}>{subs.join(' + ')}</span> : null}</span> } },
+        { title: '', width: 170, align: 'right' as const, render: () => <Tag color="purple">Online + Under training</Tag> },
+      ] as any} />
+  </Card>
   const subjTrainingModal = subjPop && (() => {
     const list = (subjTrainingMentors[subjPop] || []).slice().sort((a: any, b: any) => String(a.full_name).localeCompare(String(b.full_name)))
     return <Modal open title={<span><Tag color="geekblue">{subjPop}</Tag> {list.length} candidate{list.length === 1 ? '' : 's'} under training</span>} footer={null} width={600} onCancel={() => setSubjPop(null)}>
@@ -3811,7 +3826,7 @@ function MentorGeneration() {
     <Tabs defaultActiveKey="content" items={[
       { key: 'content', label: 'Training topics', children: <ContentExplorer /> },
       { key: 'pipeline', label: 'Pipeline & subjects', children: <MentorPipeline mentors={mentors} mentorSubjects={mentorSubjects} deps={deps} subjTrainers={subjTrainers} onChanged={load} /> },
-      { key: 'mentor', label: `Mentor under training (${trainingCount})`, children: <div>{kpis}{subjTrainingCards}<Tabs defaultActiveKey="prep" items={[
+      { key: 'mentor', label: `Mentor under training (${trainingTotal})`, children: <div>{kpis}{subjTrainingCards}{onlineTrainingCard}<Tabs defaultActiveKey="prep" items={[
         { key: 'prep', label: 'Preparation board', children: <div>
           {canManage && <div style={{ marginBottom: 12 }}><Button size="small" icon={<PlusOutlined />} onClick={() => setShowAssign((v) => !v)}>{showAssign ? 'Hide assign panel' : 'Assign topics to mentors'}</Button></div>}
           {showAssign && assignCard}{boardCard}</div> },
