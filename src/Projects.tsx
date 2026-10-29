@@ -122,14 +122,23 @@ export default function Projects() {
 // Subject performance — which Subject's candidates are doing best (by rating)
 // ============================================================================
 function SubjectPerformanceDashboard({ db, onOpen }: any) {
+  const norm = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
   const rows = db.projects.map((p: any) => {
     const cands = db.candidates.filter((c: any) => c.projectId === p.id)
     const candAvgs = cands.map((c: any) => avgRatingOf(db.ratings, c.id)).filter((a: any) => a != null) as number[]
     const avg = candAvgs.length ? candAvgs.reduce((a, b) => a + b, 0) / candAvgs.length : null
     const org = db.orgs.find((o: any) => o.id === p.orgId)?.name || ''
-    const sylCount = db.syllabus.filter((s: any) => s.projectId === p.id).length
-    const possible = cands.length * sylCount * ACTIVITIES.length
-    const done = db.progress.filter((pr: any) => pr.projectId === p.id && pr.status === 'Completed' && ACTIVITIES.includes(pr.activity)).length
+    const sylRows = db.syllabus.filter((s: any) => s.projectId === p.id)
+    // Completion per candidate, against THEIR batch's covered subject (as the student sees it).
+    let possible = 0, done = 0
+    cands.forEach((c: any) => {
+      const covers = db.batches.find((b: any) => b.id === c.batchId)?.subject || ''
+      let candSyl = covers ? sylRows.filter((s: any) => norm(s.subject) === norm(covers)) : sylRows
+      if (!candSyl.length) candSyl = sylRows
+      possible += candSyl.length * ACTIVITIES.length
+      const ids = new Set(candSyl.map((s: any) => s.id))
+      done += db.progress.filter((pr: any) => pr.candidateId === c.id && pr.status === 'Completed' && ACTIVITIES.includes(pr.activity) && ids.has(pr.topicId)).length
+    })
     const comp = possible ? Math.round(100 * done / possible) : 0
     return { id: p.id, name: p.name, org, nCand: cands.length, nRated: candAvgs.length, avg, comp }
   }).filter((r: any) => r.nCand > 0)
@@ -164,12 +173,20 @@ function SubjectPerformanceDashboard({ db, onOpen }: any) {
                 <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.name}</div>
                 <div style={{ fontSize: 11, color: '#9aa1ad', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.org}</div>
               </div>
+              <Tag icon={<TeamOutlined />} color="geekblue" style={{ flexShrink: 0, margin: 0 }}>{r.nCand} candidate{r.nCand === 1 ? '' : 's'}</Tag>
               <div style={{ flex: 1, minWidth: 80 }}>
-                {r.avg != null
-                  ? <Progress percent={Math.round(r.avg / 5 * 100)} strokeColor={barColor(r.avg)} format={() => `${r.avg.toFixed(2)}/5`} />
-                  : <span style={{ fontSize: 12, color: '#c8ccd4' }}>Not rated yet</span>}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: 10, color: '#9aa1ad', width: 52, flexShrink: 0 }}>Rating</span>
+                  {r.avg != null
+                    ? <Progress percent={Math.round(r.avg / 5 * 100)} strokeColor={barColor(r.avg)} format={() => `${r.avg.toFixed(2)}/5`} />
+                    : <span style={{ fontSize: 12, color: '#c8ccd4' }}>Not rated yet</span>}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                  <span style={{ fontSize: 10, color: '#9aa1ad', width: 52, flexShrink: 0 }}>Completion</span>
+                  <Progress percent={r.comp} strokeColor="#0ea5e9" format={(v?: number) => `${v}% done`} />
+                </div>
               </div>
-              <span style={{ fontSize: 11, color: '#69707d', width: 130, textAlign: 'right', flexShrink: 0 }}>{r.nRated}/{r.nCand} rated · {r.comp}% done</span>
+              <span style={{ fontSize: 11, color: '#69707d', width: 90, textAlign: 'right', flexShrink: 0 }}>{r.nRated}/{r.nCand} rated</span>
             </div>
           ))}
         </div>
