@@ -424,12 +424,28 @@ function SyllabusTab({ run, pid, syllabus }: any) {
     reader.onload = async (e) => {
       try {
         const wb = XLSX.read(e.target?.result, { type: 'binary' })
-        const rows: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]])
-        const add = rows.map((r) => ({ subject_id: pid, subject: String(r.Subject || r.subject || 'General').trim(), chapter: String(r.Chapter || r.chapter || '—').trim() || '—', topic: String(r.Topic || r.topic || '').trim(), subtopic: String(r['Sub topic'] || r['Sub-topic'] || r.Subtopic || r.subtopic || '—').trim() || '—' })).filter((r) => r.topic || (r.subtopic && r.subtopic !== '—'))
-        if (!add.length) { msg.warning('Nothing to import. Columns: Subject, Chapter, Topic, Sub topic.'); return }
+        const rows: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: '' })
+        if (!rows.length) { msg.warning('That sheet looks empty. Columns: Subject, Chapter, Topic, Sub topic.'); return }
+        // Match columns regardless of case / spaces / punctuation, so "Sub Topic",
+        // "Sub-topic", "SubTopic", "Module", etc. all work.
+        const nk = (k: any) => String(k).toLowerCase().replace(/[^a-z0-9]/g, '')
+        const pick = (r: any, keys: string[]) => { const m: Record<string, any> = {}; Object.keys(r).forEach((k) => { m[nk(k)] = r[k] }); for (const key of keys) { const v = m[key]; if (v != null && String(v).trim()) return String(v).trim() } return '' }
+        const add = rows.map((r) => ({
+          subject_id: pid,
+          subject: pick(r, ['subject', 'subjectname', 'technology', 'course', 'coursename']) || 'General',
+          chapter: pick(r, ['chapter', 'module', 'unit', 'section']) || '—',
+          topic: pick(r, ['topic', 'topicname', 'title']),
+          subtopic: pick(r, ['subtopic', 'subtopics', 'subtopicname']) || '—',
+        })).filter((r) => r.topic || (r.subtopic && r.subtopic !== '—'))
+        if (!add.length) {
+          const headers = Object.keys(rows[0] || {}).join(', ')
+          msg.warning(`No Topic/Sub topic column found. Columns I saw: ${headers || '(none)'}. Expected Subject, Chapter, Topic, Sub topic.`)
+          return
+        }
         await run(() => insMany('pj_syllabus', add), `${add.length} row(s) uploaded`)
-      } catch { msg.error('Could not read the file. Columns: Subject, Chapter, Topic, Sub topic.') }
+      } catch (err: any) { msg.error('Could not read the file — ' + (err?.message || 'make sure it is an .xlsx/.csv with Subject, Chapter, Topic, Sub topic columns.')) }
     }
+    reader.onerror = () => msg.error('Could not read that file. Please try again.')
     reader.readAsBinaryString(file); return false
   }
   const downloadTemplate = () => {
