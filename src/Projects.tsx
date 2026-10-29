@@ -20,7 +20,7 @@ import {
 import dayjs from 'dayjs'
 import { supabase } from './supabase'
 
-const ACTIVITIES = ['Videos', 'Presentation', 'Assignment', 'Assessment', 'Mock Test']
+const ACTIVITIES = ['Presentation', 'Assignment', 'Assessment', 'Mock Test']
 // Trainer/mentor rates these activities per sub-topic (Videos is student self-progress only).
 const RATING_ACTIVITIES = ['Presentation', 'Assignment', 'Assessment', 'Mock Test']
 const SCORES = [0, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]
@@ -48,6 +48,28 @@ function buildTree(rows: any[]) {
 }
 // Rows whose topic/sub-topic text matches a search query (case-insensitive).
 const matchRows = (rows: any[], q: string) => { const ql = q.trim().toLowerCase(); return ql ? rows.filter((s) => (`${s.topic || ''} ${s.subtopic || ''}`).toLowerCase().includes(ql)) : rows }
+// AntD Tree data for a built tree: Subject → Chapter → Topic → selectable Sub-topic leaves.
+// A topic with no real sub-topics becomes the selectable leaf itself. Returns the branch
+// keys (to expand on search) and subject keys (to expand by default) alongside the data.
+function buildTreeData(tree: any[]) {
+  const branchKeys: string[] = []; const subjectKeys: string[] = []
+  const treeData = tree.map((subj: any, si: number) => {
+    const sKey = 'S' + si; subjectKeys.push(sKey); branchKeys.push(sKey)
+    const kids = subj.chapters.flatMap((ch: any, ci: number) => {
+      const topicNodes = ch.topics.map((tp: any, tpi: number) => {
+        const realLeaves = tp.leaves.filter((l: any) => l.subtopic && l.subtopic !== '—')
+        if (realLeaves.length === 0) return { key: tp.leaves[0].id, title: tp.topic, isLeaf: true }
+        const tKey = `T${si}_${ci}_${tpi}`; branchKeys.push(tKey)
+        return { key: tKey, title: tp.topic, selectable: false, children: tp.leaves.map((l: any) => ({ key: l.id, title: leafLabel(l), isLeaf: true })) }
+      })
+      if (ch.chapter === '—') return topicNodes
+      const cKey = `C${si}_${ci}`; branchKeys.push(cKey)
+      return [{ key: cKey, title: ch.chapter, selectable: false, children: topicNodes }]
+    })
+    return { key: sKey, title: subj.subject, selectable: false, children: kids }
+  })
+  return { treeData, branchKeys, subjectKeys }
+}
 const MISSING = /relation .*pj_|does not exist|schema cache|function pj_/i
 const needV41 = (e: any) => e && MISSING.test(e.message || '')
 
@@ -184,7 +206,7 @@ function SubjectWorkspace({ db, run, reload, project, org, onBack }: any) {
       { key: 'dash', label: <span><DashboardOutlined /> Dashboard</span>, children: <SubjectDashboard {...ctx} /> },
       { key: 'batch', label: <span><TeamOutlined /> Batches & Students</span>, children: <BatchesTab {...ctx} /> },
       { key: 'att', label: <span><CalendarOutlined /> Attendance</span>, children: <AttendanceTab {...ctx} /> },
-      { key: 'syl', label: <span><ReadOutlined /> Syllabus</span>, children: <SyllabusTab {...ctx} /> },
+      { key: 'syl', label: <span><ReadOutlined /> Course</span>, children: <SyllabusTab {...ctx} /> },
       { key: 'rate', label: <span><StarOutlined /> Ratings</span>, children: <RatingsTab {...ctx} /> },
       { key: 'prog', label: <span><PartitionOutlined /> Candidate progress</span>, children: <ProgressTab {...ctx} /> },
       { key: 'dep', label: <span><RocketOutlined /> Deployment</span>, children: <DeploymentTab {...ctx} /> },
@@ -262,8 +284,8 @@ function BatchesTab({ run, pid, batches, candidates, syllabus }: any) {
     <Modal open={!!batchModal} title={batchModal?.id ? 'Edit batch' : 'Add batch'} onCancel={() => setBatchModal(null)} onOk={() => bf.submit()} okText="Save">
       <Form form={bf} layout="vertical" onFinish={saveBatch} style={{ marginTop: 12 }}>
         <Form.Item name="name" label="Batch name" rules={[{ required: true, message: 'Enter a batch name' }]}><Input placeholder="e.g. Oct-26 Batch A" /></Form.Item>
-        <Form.Item name="subject" label="Subject this batch covers" tooltip="Students see only this subject's syllabus at login.">
-          {sylSubjects.length ? <Select allowClear showSearch placeholder="Pick a subject from the syllabus" options={sylSubjects.map((s) => ({ value: s, label: s }))} /> : <Input placeholder="Type the subject name (upload syllabus first to pick)" />}
+        <Form.Item name="subject" label="Subject this batch covers" tooltip="Students see only this subject's course at login.">
+          {sylSubjects.length ? <Select allowClear showSearch placeholder="Pick a subject from the course" options={sylSubjects.map((s) => ({ value: s, label: s }))} /> : <Input placeholder="Type the subject name (upload course first to pick)" />}
         </Form.Item>
       </Form>
     </Modal>
@@ -341,13 +363,13 @@ function SyllabusTab({ run, pid, syllabus }: any) {
       { Subject: 'Advance Java', Chapter: 'Spring Boot', Topic: 'REST', 'Sub topic': 'Controllers' },
     ])
     ws['!cols'] = [{ wch: 18 }, { wch: 22 }, { wch: 20 }, { wch: 22 }]
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Syllabus'); XLSX.writeFile(wb, 'syllabus-template.xlsx')
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Course'); XLSX.writeFile(wb, 'course-template.xlsx')
   }
   const subjects = [...new Set(syllabus.map((s: any) => s.subject))].sort() as string[]
   const rowsOfSubject = (subj: string) => syllabus.filter((s: any) => s.subject === subj)
   const downloadSubject = (subj: string) => {
     const ws = XLSX.utils.json_to_sheet(rowsOfSubject(subj).map((s: any) => ({ Subject: s.subject, Chapter: s.chapter === '—' ? '' : s.chapter, Topic: s.topic, 'Sub topic': s.subtopic === '—' ? '' : s.subtopic })))
-    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Syllabus'); XLSX.writeFile(wb, `syllabus-${subj.replace(/[^a-z0-9]+/gi, '-')}.xlsx`)
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Course'); XLSX.writeFile(wb, `course-${subj.replace(/[^a-z0-9]+/gi, '-')}.xlsx`)
   }
   const delSubject = async (subj: string) => { for (const s of rowsOfSubject(subj)) await del('pj_syllabus', s.id); await run(async () => null, `Removed ${subj}`) }
   return <Card styles={{ body: { padding: 16 } }}>
@@ -358,12 +380,12 @@ function SyllabusTab({ run, pid, syllabus }: any) {
         <Form.Item name="topic"><Input placeholder="Topic" style={{ width: 150 }} /></Form.Item>
         <Form.Item name="subtopic"><Input placeholder="Sub topic" style={{ width: 150 }} /></Form.Item>
         <Form.Item><Button type="primary" icon={<PlusOutlined />} htmlType="submit">Add</Button></Form.Item>
-        <Form.Item><Upload accept=".xlsx,.xls,.csv" showUploadList={false} beforeUpload={onFile as any}><Button icon={<UploadOutlined />}>Upload syllabus (Excel)</Button></Upload></Form.Item>
+        <Form.Item><Upload accept=".xlsx,.xls,.csv" showUploadList={false} beforeUpload={onFile as any}><Button icon={<UploadOutlined />}>Upload course (Excel)</Button></Upload></Form.Item>
         <Form.Item><Button icon={<DownloadOutlined />} onClick={downloadTemplate}>Download template</Button></Form.Item>
       </Form>
       <div style={{ fontSize: 11, color: '#9aa1ad', marginTop: 8 }}>Template columns — <b>Subject</b>, <b>Chapter</b>, <b>Topic</b>, <b>Sub topic</b>.</div>
     </div>
-    {subjects.length === 0 ? <Empty description="No syllabus yet — upload an Excel with Subject, Chapter, Topic, Sub topic columns." />
+    {subjects.length === 0 ? <Empty description="No course yet — upload an Excel with Subject, Chapter, Topic, Sub topic columns." />
       : <Row gutter={[12, 12]}>
         {subjects.map((subj) => (
           <Col xs={24} sm={12} lg={8} key={subj}>
@@ -371,7 +393,7 @@ function SyllabusTab({ run, pid, syllabus }: any) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 8 }}>
                 <div><div style={{ fontWeight: 700, fontSize: 15 }}><ReadOutlined style={{ color: PRIMARY, marginRight: 6 }} />{subj}</div>
                   <div style={{ fontSize: 12, color: '#9aa1ad', marginTop: 2 }}>{rowsOfSubject(subj).length} row{rowsOfSubject(subj).length === 1 ? '' : 's'}</div></div>
-                <Popconfirm title={`Remove “${subj}” syllabus?`} okButtonProps={{ danger: true }} onConfirm={() => delSubject(subj)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm>
+                <Popconfirm title={`Remove “${subj}” course?`} okButtonProps={{ danger: true }} onConfirm={() => delSubject(subj)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm>
               </div>
               <Button size="small" icon={<DownloadOutlined />} style={{ marginTop: 10 }} onClick={() => downloadSubject(subj)}>Download Excel</Button>
             </Card>
@@ -416,6 +438,8 @@ function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
   const { message: msg } = AntApp.useApp()
   const [cid, setCid] = useState<string | null>(null)
   const [query, setQuery] = useState('')
+  const [selId, setSelId] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<any[]>([])
   // pending edits live in a ref (keyed `${nodeId}|${activity}`) so editing never re-renders the parent
   const pending = useRef<Record<string, { score?: number; remark?: string }>>({})
   // O(1) lookup of the picked student's existing ratings (avoids scanning the array per control)
@@ -425,7 +449,16 @@ function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
     return m
   }, [ratings, cid])
   const onEdit = useCallback((key: string, patch: any) => { pending.current[key] = { ...pending.current[key], ...patch } }, [])
-  const pickStudent = (id: string | null) => { setCid(id); pending.current = {}; setQuery('') } // reset edits so one student's remarks never bleed into another
+  const scoreOpts = useMemo(() => SCORES.map((n) => ({ value: n, label: n === 0 ? '—' : `${n}` })), [])
+  // Same Subject → Chapter → Topic → Sub-topic tree as the student portal.
+  const { treeData, branchKeys, subjectKeys, shownCount } = useMemo(() => {
+    const shown = matchRows(syllabus, query)
+    return { ...buildTreeData(buildTree(shown)), shownCount: shown.length }
+  }, [syllabus, query])
+  const branchRef = useRef<string[]>([]); branchRef.current = branchKeys
+  const subjRef = useRef<string[]>([]); subjRef.current = subjectKeys
+  useEffect(() => { setExpanded(query.trim() ? branchRef.current : subjRef.current) }, [query])
+  const pickStudent = (id: string | null) => { setCid(id); pending.current = {}; setQuery(''); setSelId(null) } // reset edits so one student's remarks never bleed into another
   const save = async () => {
     if (!cid) return
     const today = dayjs().format('YYYY-MM-DD')
@@ -450,50 +483,43 @@ function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
   const ratedNodes = (id: string) => new Set(ratings.filter((r: any) => r.candidateId === id && r.score != null).map((r: any) => r.topicId)).size
   const summaryCols = [
     slCol,
-    { title: 'Student', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
-    { title: 'Batch', dataIndex: 'batch', width: 120, render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
-    { title: 'Rated', width: 110, render: (_: any, c: any) => <span>{ratedNodes(c.id)} / {syllabus.length}</span> },
-    { title: 'Average', width: 120, render: (_: any, c: any) => { const a = avgRatingOf(ratings, c.id); return a == null ? <span style={{ color: '#9aa1ad' }}>—</span> : <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'}>{a.toFixed(2)} / 5</Tag> } },
-    { title: '', width: 90, render: (_: any, c: any) => <Button size="small" onClick={() => pickStudent(c.id)}>Rate</Button> },
+    { title: 'Student', dataIndex: 'name', render: (v: string, c: any) => { const a = avgRatingOf(ratings, c.id); return <span><b>{v}</b>{a != null && <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'} style={{ marginLeft: 6 }}>{a.toFixed(1)}</Tag>}</span> } },
+    { title: 'Rated', width: 72, render: (_: any, c: any) => <span style={{ fontSize: 12, color: '#69707d' }}>{ratedNodes(c.id)}/{syllabus.length}</span> },
+    { title: '', width: 70, render: (_: any, c: any) => <Button size="small" type={cid === c.id ? 'primary' : 'default'} onClick={() => pickStudent(c.id)}>Rate</Button> },
   ]
-  const shown = matchRows(syllabus, query)
-  const tree = buildTree(shown)
-  const scoreOpts = useMemo(() => SCORES.map((n) => ({ value: n, label: n === 0 ? '—' : `${n}` })), [])
+  const sel = selId ? syllabus.find((s: any) => s.id === selId) : null
   return <Row gutter={16}>
-    <Col xs={24} lg={11}>
-      <Card size="small" title="Students — ratings summary" styles={{ body: { padding: 12 } }}>
-        <Table size="small" rowKey="id" columns={summaryCols as any} dataSource={candidates} pagination={{ pageSize: 12 }} locale={{ emptyText: <Empty description="Add students first" /> }} />
+    <Col xs={24} lg={7}>
+      <Card size="small" title="Students" styles={{ body: { padding: 8 } }}>
+        <Table size="small" rowKey="id" columns={summaryCols as any} dataSource={candidates} pagination={{ pageSize: 10 }} locale={{ emptyText: <Empty description="Add students first" /> }} />
       </Card>
     </Col>
-    <Col xs={24} lg={13}>
+    <Col xs={24} lg={17}>
       <Card size="small" styles={{ body: { padding: 12 } }}
         title={<span>Rate by sub-topic{cid ? <> — <b>{candName(candidates, cid)}</b></> : ''}</span>}
         extra={<Select showSearch optionFilterProp="label" placeholder="Pick student" value={cid} onChange={pickStudent} style={{ minWidth: 190 }} options={candidates.map((c: any) => ({ value: c.id, label: c.name }))} />}>
         {!cid ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Pick a student to rate" />
-          : syllabus.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Add syllabus first" />
-            : <div key={cid}>
-              <Input allowClear size="small" prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search topic / sub-topic" value={query} onChange={(e) => setQuery(e.target.value)} style={{ marginBottom: 10 }} />
-              {shown.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span>No topic or sub-topic matches “{query}”.</span>} />
-                : <div style={{ maxHeight: 440, overflowY: 'auto' }}>
-                  <Collapse key={query} defaultActiveKey={query.trim() ? tree.map((t: any) => t.subject) : []} items={tree.map((node: any) => ({
-                    key: node.subject, label: <b>{node.subject}</b>,
-                    children: node.chapters.map((chNode: any, ci: number) => (
-                      <div key={ci} style={{ marginBottom: 8 }}>
-                        {chNode.chapter !== '—' && <div style={{ fontSize: 12, color: '#69707d', fontWeight: 700, marginBottom: 6 }}>{chNode.chapter}</div>}
-                        {chNode.topics.map((tpNode: any, ti: number) => (
-                          <div key={ti} style={{ marginLeft: chNode.chapter !== '—' ? 12 : 0, marginBottom: 8 }}>
-                            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>{tpNode.topic}</div>
-                            {tpNode.leaves.map((s: any) => (
-                              <LeafRater key={s.id} leaf={s} exMap={exMap} pending={pending} scoreOpts={scoreOpts} onEdit={onEdit} />
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    )),
-                  }))} />
-                </div>}
-              <Button type="primary" block style={{ marginTop: 12 }} onClick={save}>Save ratings</Button>
-            </div>}
+          : syllabus.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Add course first" />
+            : <>
+              <Row gutter={12}>
+                <Col xs={24} md={10}>
+                  <Input allowClear size="small" prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search topic / sub-topic" value={query} onChange={(e) => setQuery(e.target.value)} style={{ marginBottom: 8 }} />
+                  {shownCount === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span>No match for “{query}”.</span>} />
+                    : <Tree treeData={treeData} height={420} blockNode showLine
+                        expandedKeys={expanded} onExpand={(k) => setExpanded(k)}
+                        selectedKeys={selId ? [selId] : []}
+                        onSelect={(keys) => { if (keys[0] != null) setSelId(String(keys[0])) }} />}
+                </Col>
+                <Col xs={24} md={14}>
+                  {sel ? <>
+                      <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 8 }}>{nodePath(sel)}</div>
+                      <LeafRater key={(cid || '') + '|' + sel.id} leaf={sel} exMap={exMap} pending={pending} scoreOpts={scoreOpts} onEdit={onEdit} />
+                    </> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Pick a sub-topic on the left to rate" />}
+                </Col>
+              </Row>
+              <div style={{ fontSize: 11, color: '#9aa1ad', margin: '6px 0' }}>Rate sub-topics across the tree, then Save once.</div>
+              <Button type="primary" block onClick={save}>Save ratings</Button>
+            </>}
       </Card>
     </Col>
   </Row>
@@ -505,7 +531,7 @@ function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
 function ProgressTab({ candidates, syllabus, progress, ratings }: any) {
   const [open, setOpen] = useState<string | null>(null)
   const total = syllabus.length * ACTIVITIES.length
-  const doneOf = (cid: string) => progress.filter((p: any) => p.candidateId === cid && p.status === 'Completed').length
+  const doneOf = (cid: string) => progress.filter((p: any) => p.candidateId === cid && p.status === 'Completed' && ACTIVITIES.includes(p.activity)).length
   const cols = [
     slCol,
     { title: 'Student', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
@@ -517,7 +543,7 @@ function ProgressTab({ candidates, syllabus, progress, ratings }: any) {
   const ratingList = open ? ratings.filter((r: any) => r.candidateId === open).map((r: any) => { const s = syllabus.find((x: any) => x.id === r.topicId); return { ...r, path: s ? nodePath(s) : '—' } }) : []
   return <Card styles={{ body: { padding: 16 } }}>
     <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 10 }}>Completion = activities students update. Avg rating = what the trainer gave (also shown to the student).</div>
-    <Table size="small" rowKey="id" columns={cols as any} dataSource={candidates} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="Add students & syllabus first" /> }} />
+    <Table size="small" rowKey="id" columns={cols as any} dataSource={candidates} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="Add students & course first" /> }} />
     <Modal open={!!open} title={<span>Ratings · {candName(candidates, open || '')}</span>} footer={null} width={640} onCancel={() => setOpen(null)}>
       {ratingList.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ratings given yet" />
         : <Table size="small" rowKey="id" pagination={false} dataSource={ratingList} columns={[
@@ -622,7 +648,7 @@ function SubjectDashboard({ batches, candidates, attendance, ratings, deployment
       <Col xs={12} md={6}><Stat label="Batches" value={batches.length} color="#2563eb" /></Col>
       <Col xs={12} md={6}><Stat label="Avg attendance" value={attPct == null ? '—' : attPct} suffix={attPct == null ? '' : '%'} color="#16a34a" /></Col>
       <Col xs={12} md={6}><Stat label="Avg rating" value={avgRating == null ? '—' : avgRating.toFixed(2)} suffix={avgRating == null ? '' : '/ 5'} color="#d97706" /></Col>
-      <Col xs={12} md={6}><Stat label="Syllabus rows" value={syllabus.length} color="#0ea5e9" /></Col>
+      <Col xs={12} md={6}><Stat label="Course rows" value={syllabus.length} color="#0ea5e9" /></Col>
       <Col xs={12} md={6}><Stat label="Interviews given" value={deployments.length} color="#7c3aed" /></Col>
       <Col xs={12} md={6}><Stat label="Deployed" value={deployed} color="#16a34a" /></Col>
       <Col xs={12} md={6}><Stat label="In pipeline" value={deployments.filter((d: any) => d.status !== 'Deployed' && d.status !== 'Rejected').length} color="#ea580c" /></Col>
@@ -668,7 +694,7 @@ function CandidateLogin({ onLogin }: any) {
     <Card>
       <div style={{ textAlign: 'center', marginBottom: 16 }}>
         <div style={{ fontSize: 20, fontWeight: 800 }}><TeamOutlined style={{ color: PRIMARY, marginRight: 6 }} />Candidate sign in</div>
-        <div style={{ fontSize: 13, color: '#9aa1ad' }}>Update your syllabus progress and see your ratings.</div>
+        <div style={{ fontSize: 13, color: '#9aa1ad' }}>Update your course progress and see your ratings.</div>
       </div>
       <div style={{ fontSize: 12, color: '#69707d', marginBottom: 4 }}>Email</div>
       <Input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" onPressEnter={submit} style={{ marginBottom: 10 }} />
@@ -714,24 +740,7 @@ function CandidatePortal({ sess, onLogout }: any) {
   const { treeData, branchKeys, subjectKeys, shownCount } = useMemo(() => {
     if (!d) return { treeData: [] as any[], branchKeys: [] as string[], subjectKeys: [] as string[], shownCount: 0 }
     const shown = matchRows(d.syllabus, query)
-    const tree = buildTree(shown)
-    const branchKeys: string[] = []; const subjectKeys: string[] = []
-    const treeData = tree.map((subj: any, si: number) => {
-      const sKey = 'S' + si; subjectKeys.push(sKey); branchKeys.push(sKey)
-      const kids = subj.chapters.flatMap((ch: any, ci: number) => {
-        const topicNodes = ch.topics.map((tp: any, tpi: number) => {
-          const realLeaves = tp.leaves.filter((l: any) => l.subtopic && l.subtopic !== '—')
-          if (realLeaves.length === 0) return { key: tp.leaves[0].id, title: tp.topic, isLeaf: true }
-          const tKey = `T${si}_${ci}_${tpi}`; branchKeys.push(tKey)
-          return { key: tKey, title: tp.topic, selectable: false, children: tp.leaves.map((l: any) => ({ key: l.id, title: leafLabel(l), isLeaf: true })) }
-        })
-        if (ch.chapter === '—') return topicNodes
-        const cKey = `C${si}_${ci}`; branchKeys.push(cKey)
-        return [{ key: cKey, title: ch.chapter, selectable: false, children: topicNodes }]
-      })
-      return { key: sKey, title: subj.subject, selectable: false, children: kids }
-    })
-    return { treeData, branchKeys, subjectKeys, shownCount: shown.length }
+    return { ...buildTreeData(buildTree(shown)), shownCount: shown.length }
   }, [d, query])
 
   // When searching, open every branch so matches show; otherwise open subjects.
@@ -752,7 +761,7 @@ function CandidatePortal({ sess, onLogout }: any) {
     load()
   }
   const total = syllabus.length * ACTIVITIES.length
-  const done = Object.entries(prog).filter(([k, v]) => v === 'Completed' && syllabus.some((s: any) => k.startsWith(s.id + '|'))).length
+  const done = Object.entries(prog).filter(([k, v]) => v === 'Completed' && ACTIVITIES.includes(k.split('|')[1]) && syllabus.some((s: any) => k.startsWith(s.id + '|'))).length
   const pct = total ? Math.round(100 * done / total) : 0
   const rs = myRatings.filter((r: any) => r.score != null)
   const avg = rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null
@@ -774,10 +783,10 @@ function CandidatePortal({ sess, onLogout }: any) {
     </div>
     <Row gutter={16}>
       <Col xs={24} md={9}>
-        <Card size="small" title="Syllabus"
+        <Card size="small" title="Course"
           extra={syllabus.length ? <Input allowClear size="small" prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search topic / sub-topic" value={query} onChange={(e) => setQuery(e.target.value)} style={{ width: 170 }} /> : null}
           styles={{ body: { padding: 8 } }}>
-          {syllabus.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No syllabus yet — your trainer will add it." />
+          {syllabus.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No course yet — your trainer will add it." />
             : shownCount === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span>No match for “{query}”.</span>} />
             : <Tree treeData={treeData} height={460} blockNode showLine
                 expandedKeys={expanded} onExpand={(k) => setExpanded(k)}
@@ -786,7 +795,7 @@ function CandidatePortal({ sess, onLogout }: any) {
         </Card>
       </Col>
       <Col xs={24} md={15}>
-        <Card size="small" title={sel ? <span>{leafLabel(sel)}{selAvg != null && <Tag color={selAvg >= 4 ? 'green' : selAvg >= 3 ? 'orange' : 'red'} style={{ marginLeft: 8 }}>Trainer avg {selAvg.toFixed(1)}/5</Tag>}</span> : 'Activities'}
+        <Card size="small" title={<span>Learning Activities{sel && selAvg != null && <Tag color={selAvg >= 4 ? 'green' : selAvg >= 3 ? 'orange' : 'red'} style={{ marginLeft: 8 }}>Trainer avg {selAvg.toFixed(1)}/5</Tag>}</span>}
           styles={{ body: { padding: 14 } }}>
           {!sel ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Pick a sub-topic on the left to update its activities" />
             : <div>
