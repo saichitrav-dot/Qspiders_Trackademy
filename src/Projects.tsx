@@ -642,28 +642,56 @@ function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
 // ============================================================================
 // Candidate progress (trainer view)
 // ============================================================================
-function ProgressTab({ candidates, syllabus, progress, ratings }: any) {
-  const [open, setOpen] = useState<string | null>(null)
-  const total = syllabus.length * ACTIVITIES.length
-  const doneOf = (cid: string) => progress.filter((p: any) => p.candidateId === cid && p.status === 'Completed' && ACTIVITIES.includes(p.activity)).length
+function ProgressTab({ candidates, batches, syllabus, progress, ratings }: any) {
+  const [open, setOpen] = useState<string | null>(null) // group key
+  const splitList = (s: any) => String(s || '').split(',').map((x: string) => x.trim()).filter(Boolean)
+  const tagC = (a: number) => a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'
+  const nodeSubj = useMemo(() => { const m: Record<string, string> = {}; syllabus.forEach((s: any) => { m[s.id] = s.subject }); return m }, [syllabus])
+  const coversOf = (cid: string) => { const c = candidates.find((x: any) => x.id === cid); const b = (batches || []).find((bb: any) => bb.id === c?.batchId); return splitList(b?.subject) }
+  // One row per real student: records with the same email (else same name) are merged,
+  // so a student mapped to several subjects shows once, with each subject's own average.
+  const groups = useMemo(() => {
+    const g: Record<string, any> = {}; const cidGroup: Record<string, any> = {}
+    candidates.forEach((c: any) => {
+      const key = c.email ? 'e:' + String(c.email).toLowerCase() : 'n:' + String(c.name || '').toLowerCase()
+      if (!g[key]) g[key] = { key, name: c.name, email: c.email || '', cids: [], batchNames: new Set<string>(), subjects: new Set<string>() }
+      g[key].cids.push(c.id); cidGroup[c.id] = g[key]
+      if (c.batch) g[key].batchNames.add(c.batch)
+      coversOf(c.id).forEach((s: string) => g[key].subjects.add(s))
+    })
+    ratings.forEach((r: any) => { if (r.score == null) return; const grp = cidGroup[r.candidateId]; const sub = nodeSubj[r.topicId]; if (grp && sub) grp.subjects.add(sub) })
+    return Object.values(g)
+  }, [candidates, batches, ratings, nodeSubj])
+  const subjAvg = (cids: string[], subject: string) => { const rs = ratings.filter((r: any) => cids.includes(r.candidateId) && r.score != null && nodeSubj[r.topicId] === subject); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null }
+  const overallAvg = (cids: string[]) => { const rs = ratings.filter((r: any) => cids.includes(r.candidateId) && r.score != null); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null }
+  const compOf = (grp: any) => {
+    const subs: Set<string> = grp.subjects.size ? grp.subjects : new Set<string>(syllabus.map((s: any) => s.subject))
+    const nodeIds = new Set(syllabus.filter((s: any) => subs.has(s.subject)).map((s: any) => s.id))
+    const possible = nodeIds.size * ACTIVITIES.length
+    const done = progress.filter((p: any) => grp.cids.includes(p.candidateId) && p.status === 'Completed' && ACTIVITIES.includes(p.activity) && nodeIds.has(p.topicId)).length
+    return possible ? Math.round(100 * done / possible) : 0
+  }
   const cols = [
     slCol,
-    { title: 'Student', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
-    { title: 'Batch', dataIndex: 'batch', width: 120, render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
-    { title: 'Completion', width: 170, render: (_: any, c: any) => { const pct = total ? Math.round(100 * doneOf(c.id) / total) : 0; return <Progress percent={pct} size="small" strokeColor={pct >= 75 ? '#16a34a' : pct >= 40 ? '#d97706' : '#dc2626'} /> } },
-    { title: 'Avg rating', width: 120, align: 'center' as const, render: (_: any, c: any) => { const a = avgRatingOf(ratings, c.id); return a == null ? <span style={{ color: '#9aa1ad' }}>—</span> : <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'}>{a.toFixed(2)} / 5</Tag> } },
-    { title: '', width: 120, render: (_: any, c: any) => <Button size="small" onClick={() => setOpen(c.id)}>View ratings</Button> },
+    { title: 'Student', render: (_: any, g: any) => <span><b>{g.name}</b>{g.email ? <div style={{ fontSize: 11, color: '#9aa1ad' }}>{g.email}</div> : null}</span> },
+    { title: 'Batch', width: 150, render: (_: any, g: any) => { const bs = [...g.batchNames] as string[]; return bs.length ? bs.map((b) => <Tag key={b} color="geekblue">{b}</Tag>) : <span style={{ color: '#9aa1ad' }}>—</span> } },
+    { title: 'Subjects & ratings', render: (_: any, g: any) => { const subs = [...g.subjects] as string[]; return subs.length ? <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{subs.map((s) => { const a = subjAvg(g.cids, s); return <Tag key={s} color={a == null ? 'default' : tagC(a)}><b>{s}</b> {a == null ? '—' : `${a.toFixed(2)}/5`}</Tag> })}</span> : <span style={{ color: '#9aa1ad' }}>—</span> } },
+    { title: 'Overall', width: 96, align: 'center' as const, render: (_: any, g: any) => { const a = overallAvg(g.cids); return a == null ? <span style={{ color: '#9aa1ad' }}>—</span> : <Tag color={tagC(a)}>{a.toFixed(2)}/5</Tag> } },
+    { title: 'Completion', width: 150, render: (_: any, g: any) => { const pct = compOf(g); return <Progress percent={pct} size="small" strokeColor={pct >= 75 ? '#16a34a' : pct >= 40 ? '#d97706' : '#dc2626'} /> } },
+    { title: '', width: 110, render: (_: any, g: any) => <Button size="small" onClick={() => setOpen(g.key)}>View ratings</Button> },
   ]
-  const ratingList = open ? ratings.filter((r: any) => r.candidateId === open).map((r: any) => { const s = syllabus.find((x: any) => x.id === r.topicId); return { ...r, path: s ? nodePath(s) : '—' } }) : []
+  const openGrp = open ? (groups as any[]).find((g) => g.key === open) : null
+  const ratingList = openGrp ? ratings.filter((r: any) => openGrp.cids.includes(r.candidateId)).map((r: any) => { const s = syllabus.find((x: any) => x.id === r.topicId); return { ...r, subject: s?.subject || '—', path: s ? nodePath(s) : '—' } }) : []
   return <Card styles={{ body: { padding: 16 } }}>
-    <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 10 }}>Completion = activities students update. Avg rating = what the trainer gave (also shown to the student).</div>
-    <Table size="small" rowKey="id" columns={cols as any} dataSource={candidates} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="Add students & course first" /> }} />
-    <Modal open={!!open} title={<span>Ratings · {candName(candidates, open || '')}</span>} footer={null} width={640} onCancel={() => setOpen(null)}>
+    <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 10 }}>One row per student. A student mapped to several subjects shows each subject with its own average rating. Completion = activities the student has updated.</div>
+    <Table size="small" rowKey="key" columns={cols as any} dataSource={groups} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="Add students & course first" /> }} />
+    <Modal open={!!open} title={<span>Ratings · {openGrp?.name || ''}</span>} footer={null} width={680} onCancel={() => setOpen(null)}>
       {ratingList.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ratings given yet" />
         : <Table size="small" rowKey="id" pagination={false} dataSource={ratingList} columns={[
+          { title: 'Subject', dataIndex: 'subject', width: 120, render: (v: string) => <Tag color="purple">{v}</Tag> },
           { title: 'Topic', dataIndex: 'path' },
-          { title: 'Activity', dataIndex: 'activity', width: 120, render: (v: string) => <Tag>{v || 'Overall'}</Tag> },
-          { title: 'Score', dataIndex: 'score', width: 90, render: (v: number) => <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v} / 5</Tag> },
+          { title: 'Activity', dataIndex: 'activity', width: 110, render: (v: string) => <Tag>{v || 'Overall'}</Tag> },
+          { title: 'Score', dataIndex: 'score', width: 84, render: (v: number) => <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v} / 5</Tag> },
           { title: 'Remark', dataIndex: 'remark', render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
         ] as any} />}
     </Modal>
