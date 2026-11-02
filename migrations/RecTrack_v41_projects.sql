@@ -64,48 +64,77 @@ language sql stable security definer set search_path = public as $$
      and (pin is null or pin = '' or pin = trim(p_pin)) limit 1;
 $$;
 
--- login by email + pin → { ok, id, name } (blocks deployed candidates)
+-- login by email + pin → { ok, id, name }. A student may have several records
+-- (one per course/workspace); return a NON-deployed one so they can see their
+-- active course(s). Blocked only when every matching record is deployed.
 create or replace function pj_candidate_login(p_email text, p_pin text) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
-declare c pj_candidate; is_dep boolean;
+declare cid uuid; cname text; any_exists boolean;
 begin
-  select * into c from pj_candidate
-   where lower(email) = lower(trim(p_email))
-     and (pin is null or pin = '' or pin = trim(p_pin)) limit 1;
-  if c.id is null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
-  select exists(select 1 from pj_deployment d where d.candidate_id = c.id and d.status = 'Deployed') into is_dep;
-  if is_dep then return jsonb_build_object('ok', false, 'error', 'deployed'); end if;
-  return jsonb_build_object('ok', true, 'id', c.id, 'name', c.name);
+  select x.id, x.name into cid, cname from pj_candidate x
+   where lower(x.email) = lower(trim(p_email))
+     and (x.pin is null or x.pin = '' or x.pin = trim(p_pin))
+     and not exists (select 1 from pj_deployment d where d.candidate_id = x.id and d.status = 'Deployed')
+   order by x.id limit 1;
+  if cid is not null then return jsonb_build_object('ok', true, 'id', cid, 'name', cname); end if;
+  select exists(select 1 from pj_candidate x where lower(x.email) = lower(trim(p_email)) and (x.pin is null or x.pin = '' or x.pin = trim(p_pin))) into any_exists;
+  if any_exists then return jsonb_build_object('ok', false, 'error', 'deployed'); end if;
+  return jsonb_build_object('ok', false, 'error', 'not_found');
 end $$;
 
--- everything the student portal needs (their subject, batch, that subject's syllabus, their ratings & progress)
+-- everything the student portal needs. Aggregates across ALL of the student's
+-- non-deployed records (same email + pin) so a student assigned to several
+-- courses — even in different workspaces — sees every one of them. `courses`
+-- carries each record's workspace + covered subjects; `syllabus` is the union
+-- of those workspaces (the frontend filters each to that record's covers).
 create or replace function pj_candidate_bootstrap(p_cid uuid, p_email text, p_pin text) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
-declare c pj_candidate; b pj_batch; s pj_subject; is_dep boolean;
+declare c pj_candidate; cids uuid[]; sids uuid[];
 begin
   c := pj_auth(p_cid, p_email, p_pin);
   if c.id is null then return jsonb_build_object('ok', false, 'error', 'auth'); end if;
-  select exists(select 1 from pj_deployment d where d.candidate_id = c.id and d.status = 'Deployed') into is_dep;
-  if is_dep then return jsonb_build_object('ok', false, 'error', 'deployed'); end if;
-  select * into b from pj_batch where id = c.batch_id;
-  select * into s from pj_subject where id = c.subject_id;
+  select array_agg(x.id), array_agg(distinct x.subject_id)
+    into cids, sids
+    from pj_candidate x
+   where lower(x.email) = lower(trim(p_email))
+     and (x.pin is null or x.pin = '' or x.pin = trim(p_pin))
+     and not exists (select 1 from pj_deployment d where d.candidate_id = x.id and d.status = 'Deployed');
+  if cids is null then return jsonb_build_object('ok', false, 'error', 'deployed'); end if;
   return jsonb_build_object('ok', true,
     'candidate', to_jsonb(c) - 'pin',
-    'subjectName', s.name, 'batchName', b.name, 'covers', b.covers,
-    'syllabus', coalesce((select jsonb_agg(to_jsonb(x) order by x.ord nulls last, x.id) from pj_syllabus x where x.subject_id = c.subject_id), '[]'::jsonb),
-    'ratings',  coalesce((select jsonb_agg(to_jsonb(x)) from pj_rating   x where x.candidate_id = c.id), '[]'::jsonb),
-    'progress', coalesce((select jsonb_agg(to_jsonb(x)) from pj_progress x where x.candidate_id = c.id), '[]'::jsonb));
+    'subjectName', (select name from pj_subject where id = c.subject_id),
+    'batchName',   (select name from pj_batch   where id = c.batch_id),
+    'covers',      (select covers from pj_batch where id = c.batch_id),
+    'courses', coalesce((select jsonb_agg(jsonb_build_object(
+          'subject_id', x.subject_id,
+          'subjectName', (select name   from pj_subject s where s.id = x.subject_id),
+          'batchName',   (select name   from pj_batch   b where b.id = x.batch_id),
+          'covers',      (select covers from pj_batch   b where b.id = x.batch_id)))
+        from pj_candidate x where x.id = any(cids)), '[]'::jsonb),
+    'syllabus', coalesce((select jsonb_agg(to_jsonb(y) order by y.ord nulls last, y.id)
+        from pj_syllabus y where y.subject_id = any(sids)), '[]'::jsonb),
+    'ratings',  coalesce((select jsonb_agg(to_jsonb(y)) from pj_rating   y where y.candidate_id = any(cids)), '[]'::jsonb),
+    'progress', coalesce((select jsonb_agg(to_jsonb(y)) from pj_progress y where y.candidate_id = any(cids)), '[]'::jsonb));
 end $$;
 
--- student updates one activity's status on a syllabus node
+-- student updates one activity's status on a syllabus node. Attribute it to the
+-- student's record whose workspace owns that node, so cross-course progress is
+-- stored under the right course (falls back to the logged-in record).
 create or replace function pj_set_progress(p_cid uuid, p_email text, p_pin text, p_node uuid, p_activity text, p_status text) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare c pj_candidate;
+declare c pj_candidate; t_cid uuid; t_sid uuid;
 begin
   c := pj_auth(p_cid, p_email, p_pin);
   if c.id is null then return jsonb_build_object('ok', false, 'error', 'auth'); end if;
-  update pj_progress set status = p_status where candidate_id = c.id and node_id = p_node and activity = p_activity;
-  if not found then insert into pj_progress(subject_id, candidate_id, node_id, activity, status) values (c.subject_id, c.id, p_node, p_activity, p_status); end if;
+  select x.id, x.subject_id into t_cid, t_sid
+    from pj_candidate x join pj_syllabus s on s.id = p_node
+   where lower(x.email) = lower(trim(p_email))
+     and (x.pin is null or x.pin = '' or x.pin = trim(p_pin))
+     and x.subject_id = s.subject_id
+   order by x.id limit 1;
+  if t_cid is null then t_cid := c.id; t_sid := c.subject_id; end if;
+  update pj_progress set status = p_status where candidate_id = t_cid and node_id = p_node and activity = p_activity;
+  if not found then insert into pj_progress(subject_id, candidate_id, node_id, activity, status) values (t_sid, t_cid, p_node, p_activity, p_status); end if;
   return jsonb_build_object('ok', true);
 end $$;
 

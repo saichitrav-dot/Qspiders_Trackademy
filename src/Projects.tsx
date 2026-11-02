@@ -866,16 +866,31 @@ function CandidatePortal({ sess, onLogout }: any) {
   const d = useMemo(() => {
     if (!boot) return null
     const norm = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
-    const allSyl = (boot.syllabus || []).map((s: any) => ({ id: s.id, subject: s.subject, chapter: s.chapter, topic: s.topic, subtopic: s.subtopic }))
+    const splitList = (s: any) => String(s || '').split(',').map((x: string) => x.trim()).filter(Boolean)
+    const allSyl = (boot.syllabus || []).map((s: any) => ({ id: s.id, subjectId: s.subject_id, subject: s.subject, chapter: s.chapter, topic: s.topic, subtopic: s.subtopic }))
     const allSubjects = [...new Set(allSyl.map((s: any) => s.subject))] as string[]
-    // A batch can cover several subjects (comma-separated in covers) — the student
-    // sees ALL of them, each as its own tree.
-    let myCovers: string[] = String(boot.covers || '').split(',').map((x: string) => x.trim()).filter(Boolean)
-    if (!myCovers.length && boot.batchName) { const bn = norm(boot.batchName); myCovers = allSubjects.filter((s) => bn.includes(norm(s))) }
-    const coverNorms = myCovers.map(norm)
-    const sylFiltered = coverNorms.length ? allSyl.filter((s: any) => coverNorms.includes(norm(s.subject))) : allSyl
-    const syllabus = sylFiltered.length ? sylFiltered : allSyl
-    const mySubject = myCovers.join(' + ')
+    const courses = boot.courses || []
+    let syllabus: any[]
+    if (courses.length) {
+      // Union of the student's workspaces; show each workspace's syllabus filtered
+      // to that record's covered subjects (empty covers => all of that workspace).
+      const coverByWs: Record<string, { all: boolean; set: Set<string> }> = {}
+      courses.forEach((co: any) => {
+        const e = coverByWs[co.subject_id] || (coverByWs[co.subject_id] = { all: false, set: new Set() })
+        const cv = splitList(co.covers).map(norm)
+        if (!cv.length) e.all = true; else cv.forEach((n) => e.set.add(n))
+      })
+      const filtered = allSyl.filter((s: any) => { const e = coverByWs[s.subjectId]; if (!e) return false; return e.all || e.set.has(norm(s.subject)) })
+      syllabus = filtered.length ? filtered : allSyl
+    } else {
+      // legacy single-workspace payload
+      let myCovers = splitList(boot.covers)
+      if (!myCovers.length && boot.batchName) { const bn = norm(boot.batchName); myCovers = allSubjects.filter((s) => bn.includes(norm(s))) }
+      const coverNorms = myCovers.map(norm)
+      const f = coverNorms.length ? allSyl.filter((s: any) => coverNorms.includes(norm(s.subject))) : allSyl
+      syllabus = f.length ? f : allSyl
+    }
+    const mySubject = [...new Set(syllabus.map((s: any) => s.subject))].join(' + ')
     const myRatings = (boot.ratings || []).map((r: any) => ({ topicId: r.node_id, activity: r.activity || '', score: r.score, remark: r.remark }))
     const prog: Record<string, string> = {}; (boot.progress || []).forEach((p: any) => { prog[p.node_id + '|' + p.activity] = p.status })
     return { candidate: boot.candidate, subjectName: boot.subjectName, batchName: boot.batchName, mySubject, syllabus, myRatings, prog }
