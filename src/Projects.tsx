@@ -149,8 +149,8 @@ function SubjectPerformanceDashboard({ db, onOpen }: any) {
     // Completion per candidate, against THEIR batch's covered subject (as the student sees it).
     let possible = 0, done = 0
     cands.forEach((c: any) => {
-      const covers = db.batches.find((b: any) => b.id === c.batchId)?.subject || ''
-      let candSyl = covers ? sylRows.filter((s: any) => norm(s.subject) === norm(covers)) : sylRows
+      const coverNorms = String(db.batches.find((b: any) => b.id === c.batchId)?.subject || '').split(',').map((x: string) => norm(x)).filter(Boolean)
+      let candSyl = coverNorms.length ? sylRows.filter((s: any) => coverNorms.includes(norm(s.subject))) : sylRows
       if (!candSyl.length) candSyl = sylRows
       possible += candSyl.length * ACTIVITIES.length
       const ids = new Set(candSyl.map((s: any) => s.id))
@@ -321,9 +321,11 @@ function BatchesTab({ run, pid, batches, candidates, syllabus }: any) {
   const [stuModal, setStuModal] = useState<any>(null)
   const [bf] = Form.useForm(); const [sf] = Form.useForm()
   const sylSubjects = [...new Set(syllabus.map((s: any) => s.subject))].sort() as string[]
-  const openBatch = (b?: any) => { setBatchModal(b || true); setTimeout(() => bf.setFieldsValue(b ? { name: b.name, subject: b.subject || undefined } : {}), 0) }
+  const splitCovers = (s: any) => String(s || '').split(',').map((x: string) => x.trim()).filter(Boolean)
+  const openBatch = (b?: any) => { setBatchModal(b || true); setTimeout(() => bf.setFieldsValue(b ? { name: b.name, subject: splitCovers(b.subject) } : {}), 0) }
   const saveBatch = async (v: any) => {
-    const row = { name: v.name.trim(), covers: v.subject || null }
+    const covers = (Array.isArray(v.subject) ? v.subject : splitCovers(v.subject)).map((x: string) => x.trim()).filter(Boolean)
+    const row = { name: v.name.trim(), covers: covers.length ? covers.join(', ') : null }
     const ok = batchModal?.id ? await run(() => upd('pj_batch', batchModal.id, row), 'Saved') : await run(() => ins('pj_batch', { subject_id: pid, ...row }), 'Batch added')
     if (ok) { setBatchModal(null); bf.resetFields() }
   }
@@ -364,7 +366,7 @@ function BatchesTab({ run, pid, batches, candidates, syllabus }: any) {
         const students = candidates.filter((c: any) => c.batchId === batch.id)
         return {
           key: batch.id,
-          label: <span><Tag color="geekblue">{batch.name}</Tag>{batch.subject ? <Tag color="purple">{batch.subject}</Tag> : <Tag color="warning" style={{ fontSize: 10 }}>no subject set</Tag>} <span style={{ color: '#9aa1ad', fontSize: 12 }}>{students.length} student{students.length === 1 ? '' : 's'}</span></span>,
+          label: <span><Tag color="geekblue">{batch.name}</Tag>{batch.subject ? splitCovers(batch.subject).map((s: string) => <Tag key={s} color="purple">{s}</Tag>) : <Tag color="warning" style={{ fontSize: 10 }}>no subject set</Tag>} <span style={{ color: '#9aa1ad', fontSize: 12 }}>{students.length} student{students.length === 1 ? '' : 's'}</span></span>,
           extra: <span style={{ display: 'inline-flex', gap: 8 }} onClick={(e) => e.stopPropagation()}>
             <Button size="small" icon={<EditOutlined />} onClick={() => openBatch(batch)}>Edit</Button>
             <Upload accept=".xlsx,.xls,.csv" showUploadList={false} beforeUpload={(f: any) => bulkAdd(batch, f)}><Button size="small" icon={<UploadOutlined />}>Import</Button></Upload>
@@ -378,8 +380,8 @@ function BatchesTab({ run, pid, batches, candidates, syllabus }: any) {
     <Modal open={!!batchModal} title={batchModal?.id ? 'Edit batch' : 'Add batch'} onCancel={() => setBatchModal(null)} onOk={() => bf.submit()} okText="Save">
       <Form form={bf} layout="vertical" onFinish={saveBatch} style={{ marginTop: 12 }}>
         <Form.Item name="name" label="Batch name" rules={[{ required: true, message: 'Enter a batch name' }]}><Input placeholder="e.g. Oct-26 Batch A" /></Form.Item>
-        <Form.Item name="subject" label="Subject this batch covers" tooltip="Students see only this subject's course at login.">
-          {sylSubjects.length ? <Select allowClear showSearch placeholder="Pick a subject from the course" options={sylSubjects.map((s) => ({ value: s, label: s }))} /> : <Input placeholder="Type the subject name (upload course first to pick)" />}
+        <Form.Item name="subject" label="Subject(s) this batch covers" tooltip="Students see all the subjects you pick here. Add one or more.">
+          <Select mode="tags" allowClear showSearch placeholder="Pick one or more subjects (type to add)" tokenSeparators={[',']} options={sylSubjects.map((s) => ({ value: s, label: s }))} />
         </Form.Item>
       </Form>
     </Modal>
@@ -838,11 +840,14 @@ function CandidatePortal({ sess, onLogout }: any) {
     const norm = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
     const allSyl = (boot.syllabus || []).map((s: any) => ({ id: s.id, subject: s.subject, chapter: s.chapter, topic: s.topic, subtopic: s.subtopic }))
     const allSubjects = [...new Set(allSyl.map((s: any) => s.subject))] as string[]
-    let mySubject: string = boot.covers || ''
-    if (!mySubject && boot.batchName) { const bn = norm(boot.batchName); mySubject = allSubjects.find((s) => bn.includes(norm(s))) || '' }
-    const myNorm = norm(mySubject)
-    const sylFiltered = mySubject ? allSyl.filter((s: any) => norm(s.subject) === myNorm) : allSyl
+    // A batch can cover several subjects (comma-separated in covers) — the student
+    // sees ALL of them, each as its own tree.
+    let myCovers: string[] = String(boot.covers || '').split(',').map((x: string) => x.trim()).filter(Boolean)
+    if (!myCovers.length && boot.batchName) { const bn = norm(boot.batchName); myCovers = allSubjects.filter((s) => bn.includes(norm(s))) }
+    const coverNorms = myCovers.map(norm)
+    const sylFiltered = coverNorms.length ? allSyl.filter((s: any) => coverNorms.includes(norm(s.subject))) : allSyl
     const syllabus = sylFiltered.length ? sylFiltered : allSyl
+    const mySubject = myCovers.join(' + ')
     const myRatings = (boot.ratings || []).map((r: any) => ({ topicId: r.node_id, activity: r.activity || '', score: r.score, remark: r.remark }))
     const prog: Record<string, string> = {}; (boot.progress || []).forEach((p: any) => { prog[p.node_id + '|' + p.activity] = p.status })
     return { candidate: boot.candidate, subjectName: boot.subjectName, batchName: boot.batchName, mySubject, syllabus, myRatings, prog }
