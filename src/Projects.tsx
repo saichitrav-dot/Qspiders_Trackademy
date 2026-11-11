@@ -485,7 +485,18 @@ function SyllabusTab({ run, pid, syllabus }: any) {
     const ws = XLSX.utils.json_to_sheet(rowsOfSubject(subj).map((s: any) => ({ Subject: s.subject, Chapter: s.chapter === '—' ? '' : s.chapter, Topic: s.topic, 'Sub topic': s.subtopic === '—' ? '' : s.subtopic })))
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Course'); XLSX.writeFile(wb, `course-${subj.replace(/[^a-z0-9]+/gi, '-')}.xlsx`)
   }
-  const delSubject = async (subj: string) => { for (const s of rowsOfSubject(subj)) await del('pj_syllabus', s.id); await run(async () => null, `Removed ${subj}`) }
+  // Delete the subject's ratings & progress FIRST (they reference node ids with no
+  // FK), so removing a course never leaves orphaned ratings pointing at gone topics.
+  const delSubject = async (subj: string) => {
+    const ids = rowsOfSubject(subj).map((s: any) => s.id)
+    for (let i = 0; i < ids.length; i += 100) {
+      const part = ids.slice(i, i + 100)
+      await supabase.from('pj_rating').delete().in('node_id', part)
+      await supabase.from('pj_progress').delete().in('node_id', part)
+    }
+    for (const id of ids) await del('pj_syllabus', id)
+    await run(async () => null, `Removed ${subj}`)
+  }
   return <Card styles={{ body: { padding: 16 } }}>
     <div style={{ background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 10, padding: 12, marginBottom: 16 }}>
       <Form form={f} layout="inline" onFinish={add} style={{ rowGap: 8 }}>
@@ -507,7 +518,7 @@ function SyllabusTab({ run, pid, syllabus }: any) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 8 }}>
                 <div><div style={{ fontWeight: 700, fontSize: 15 }}><ReadOutlined style={{ color: PRIMARY, marginRight: 6 }} />{subj}</div>
                   <div style={{ fontSize: 12, color: '#9aa1ad', marginTop: 2 }}>{rowsOfSubject(subj).length} row{rowsOfSubject(subj).length === 1 ? '' : 's'}</div></div>
-                <Popconfirm title={`Remove “${subj}” course?`} okButtonProps={{ danger: true }} onConfirm={() => delSubject(subj)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm>
+                <Popconfirm title={`Remove “${subj}” course?`} description="Also deletes the ratings & progress recorded on its topics." okButtonProps={{ danger: true }} onConfirm={() => delSubject(subj)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm>
               </div>
               <Button size="small" icon={<DownloadOutlined />} style={{ marginTop: 10 }} onClick={() => downloadSubject(subj)}>Download Excel</Button>
             </Card>
@@ -663,7 +674,7 @@ function ProgressTab({ candidates, batches, syllabus, progress, ratings }: any) 
     return Object.values(g)
   }, [candidates, batches, ratings, nodeSubj])
   const subjAvg = (cids: string[], subject: string) => { const rs = ratings.filter((r: any) => cids.includes(r.candidateId) && r.score != null && nodeSubj[r.topicId] === subject); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null }
-  const overallAvg = (cids: string[]) => { const rs = ratings.filter((r: any) => cids.includes(r.candidateId) && r.score != null); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null }
+  const overallAvg = (cids: string[]) => { const rs = ratings.filter((r: any) => cids.includes(r.candidateId) && r.score != null && nodeSubj[r.topicId]); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null }
   const compOf = (grp: any) => {
     const subs: Set<string> = grp.subjects.size ? grp.subjects : new Set<string>(syllabus.map((s: any) => s.subject))
     const nodeIds = new Set(syllabus.filter((s: any) => subs.has(s.subject)).map((s: any) => s.id))
@@ -681,7 +692,7 @@ function ProgressTab({ candidates, batches, syllabus, progress, ratings }: any) 
     { title: '', width: 110, render: (_: any, g: any) => <Button size="small" onClick={() => setOpen(g.key)}>View ratings</Button> },
   ]
   const openGrp = open ? (groups as any[]).find((g) => g.key === open) : null
-  const ratingList = openGrp ? ratings.filter((r: any) => openGrp.cids.includes(r.candidateId)).map((r: any) => { const s = syllabus.find((x: any) => x.id === r.topicId); return { ...r, subject: s?.subject || '—', path: s ? nodePath(s) : '—' } }) : []
+  const ratingList = openGrp ? ratings.filter((r: any) => openGrp.cids.includes(r.candidateId) && nodeSubj[r.topicId]).map((r: any) => { const s = syllabus.find((x: any) => x.id === r.topicId); return { ...r, subject: s?.subject || '—', path: s ? nodePath(s) : '—' } }) : []
   return <Card styles={{ body: { padding: 16 } }}>
     <div style={{ fontSize: 12, color: '#9aa1ad', marginBottom: 10 }}>One row per student. A student mapped to several subjects shows each subject with its own average rating. Completion = activities the student has updated.</div>
     <Table size="small" rowKey="key" columns={cols as any} dataSource={groups} pagination={{ pageSize: 15 }} locale={{ emptyText: <Empty description="Add students & course first" /> }} />
