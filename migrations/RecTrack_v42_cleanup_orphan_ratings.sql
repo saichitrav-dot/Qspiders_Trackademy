@@ -1,28 +1,32 @@
 -- ============================================================================
---  Trackademy v42 — clean up orphaned ratings / progress
+--  Trackademy v42 — clean up orphaned ratings / progress (SCOPED to one course)
 --
---  pj_rating.node_id and pj_progress.node_id reference a syllabus row but have
---  NO foreign key, so deleting a course (e.g. the Python course by mistake) left
---  ratings/progress pointing at topics that no longer exist. Re-adding the course
---  created brand-new topic ids, so those old ratings can't re-attach — they show
---  as ratings with a blank topic. This removes those orphans.
+--  Deleting a course hard-deletes its topics but not the ratings (node_id has no
+--  FK), so a delete+re-add (e.g. the Python course) leaves ratings pointing at
+--  topics that no longer exist. This removes those orphans — but ONLY inside the
+--  one workspace you name, so no other course is touched.
 --
---  NOTE: the orphaned ratings cannot be re-linked to the re-added topics (the
---  topic they pointed at was deleted and carried no text on the rating). After
---  running this, re-enter the affected ratings against the new topics.
+--  The orphaned ratings cannot be re-linked (the topic they pointed at is gone),
+--  so after cleanup, re-rate the re-added topics in the app.
 --
---  Idempotent / safe to re-run. Run once in the Supabase SQL editor.
+--  Run STEP 1, read the result, then run STEP 2 with that workspace's id.
+--  Idempotent / safe to re-run.
 -- ============================================================================
 
--- 1) See the damage first (how many orphans, by nothing-but-count):
-select 'orphan ratings' as what, count(*) as rows
-  from pj_rating r where not exists (select 1 from pj_syllabus s where s.id = r.node_id)
-union all
-select 'orphan progress', count(*)
-  from pj_progress p where not exists (select 1 from pj_syllabus s where s.id = p.node_id);
+-- STEP 1 — see which workspace(s) the orphans are in (expect only Python here):
+select coalesce(s.name, '(unknown)') as workspace, r.subject_id, count(*) as orphan_ratings
+  from pj_rating r
+  left join pj_subject s on s.id = r.subject_id
+ where not exists (select 1 from pj_syllabus y where y.id = r.node_id)
+ group by s.name, r.subject_id
+ order by orphan_ratings desc;
 
--- 2) Remove the orphans.
-delete from pj_rating   r where not exists (select 1 from pj_syllabus s where s.id = r.node_id);
-delete from pj_progress p where not exists (select 1 from pj_syllabus s where s.id = p.node_id);
-
-select 'orphan ratings/progress cleaned ✓' as ok;
+-- STEP 2 — delete orphans ONLY in that workspace. Paste the Python subject_id
+--          from STEP 1 into BOTH lines below (replace PASTE_PYTHON_SUBJECT_ID),
+--          then run these two statements.
+-- delete from pj_rating   r
+--  where not exists (select 1 from pj_syllabus s where s.id = r.node_id)
+--    and r.subject_id = 'PASTE_PYTHON_SUBJECT_ID';
+-- delete from pj_progress p
+--  where not exists (select 1 from pj_syllabus s where s.id = p.node_id)
+--    and p.subject_id = 'PASTE_PYTHON_SUBJECT_ID';
