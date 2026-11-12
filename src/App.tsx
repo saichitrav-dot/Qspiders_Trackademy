@@ -3270,7 +3270,6 @@ function MentorGeneration() {
   const [dailyHistory, setDailyHistory] = useState<any>({}) // mentor_id -> [{ date, avg, cats:{cat:score}, remark }] daily etiquette per day
   const [dailyQ, setDailyQ] = useState('') // Daily etiquette: search by mentor name
   const [dailyStatus, setDailyStatus] = useState<string | null>(null) // Daily etiquette: filter by lifecycle status
-  const [inactiveMentors, setInactiveMentors] = useState<Set<string>>(new Set()) // mentor ids with is_active = false
   const [subjPop, setSubjPop] = useState<string | null>(null) // under-training subject-combination widget → mentor details
   const [showAssign, setShowAssign] = useState(false) // the assign-topics widget is collapsed by default
   const [treeData, setTreeData] = useState<any[]>([])
@@ -3286,7 +3285,6 @@ function MentorGeneration() {
     if (p.error) p = await supabase.from('person').select('id, full_name, role, is_active, lead_id, program_id')
     if (p.error) p = await supabase.from('person').select('id, full_name, role, is_active')
     const allMentors = (p.data || []).filter((x: any) => x.role === 'mentor' && x.is_active)
-    setInactiveMentors(new Set((p.data || []).filter((x: any) => x.role === 'mentor' && !x.is_active).map((x: any) => x.id)))
     // multiple managing leads (v28); falls back to the single lead_id when absent
     const lm: any = {}
     if (MOCK_MENTOR_SUBTOPIC) Object.assign(lm, mockAllMentorLeads())
@@ -3434,7 +3432,9 @@ function MentorGeneration() {
       const am: any = {}; allPrep.forEach((x: any) => { if (x.topic_id) (am[x.topic_id] = am[x.topic_id] || []).push(x.mentor?.full_name || 'Assigned') }); setAssignedMap(am)
       // global mentor → set of programs they currently have ACTIVE prep in (single-domain eligibility; ignores withdrawn)
       const mpg: any = {}; allPrep.forEach((x: any) => { const pid = x.topic?.chapter?.subject?.main_subject?.id; if (pid) (mpg[x.mentor_id] = mpg[x.mentor_id] || new Set()).add(pid) }); setMentorPrograms(mpg)
-      let data = allPrep
+      // inactive mentors must not surface in any mentor feature (only People), so drop their prep
+      const inactiveIds = new Set((p.data || []).filter((x: any) => x.role === 'mentor' && !x.is_active).map((x: any) => x.id))
+      let data = allPrep.filter((row: any) => !inactiveIds.has(row.mentor_id))
       if (lp) data = data.filter((row: any) => lp!.has(row.topic?.chapter?.subject?.main_subject?.id)) // lead/manager → only prep in THEIR programs
       setRows(data)
       // per-sub-topic 4-step progress for the mentors shown on the board
@@ -3653,14 +3653,11 @@ function MentorGeneration() {
   const dailyMentors = Array.from(new Map((rows as any[]).filter((r: any) => r.mentor_id && r.topic).map((r: any) => [r.mentor_id, r])).values())
   const dmBucket = (r: any) => { const m = mentors.find((x: any) => x.id === r.mentor_id) || r.mentor; return m ? mentorBucket(m, activeDeployedSet as Set<string>, returnedSet as Set<string>) : 'in_training' }
   const dmDeployed = (r: any) => activeDeployedSet.has(r.mentor_id)
-  const dmInactive = (r: any) => inactiveMentors.has(r.mentor_id)
-  const dmStatusKey = (r: any) => dmInactive(r) ? '__inactive' : dmBucket(r) // inactive overrides the lifecycle bucket
-  const statusLabel = (k: string) => k === '__inactive' ? 'Inactive' : (BUCKET_META[k]?.label || k)
   const dailyLatestRemark = (mid: string) => { const h = (dailyHistory[mid] || []).filter((x: any) => x.remark).slice().sort((a: any, b: any) => String(b.date).localeCompare(String(a.date))); return h.length ? { text: h[0].remark, date: h[0].date } : null }
-  const dailyStatusOpts = [...new Set(dailyMentors.map(dmStatusKey))].map((k: string) => ({ value: k, label: statusLabel(k) }))
+  const dailyStatusOpts = [...new Set(dailyMentors.map(dmBucket))].map((k: string) => ({ value: k, label: BUCKET_META[k]?.label || k }))
   const dailyShown = dailyMentors.filter((r: any) => {
     const nameOk = !dailyQ.trim() || String(r.mentor?.full_name || '').toLowerCase().includes(dailyQ.trim().toLowerCase())
-    const statusOk = !dailyStatus || dmStatusKey(r) === dailyStatus
+    const statusOk = !dailyStatus || dmBucket(r) === dailyStatus
     return nameOk && statusOk
   })
   const dailyCard = <Card title="Daily corporate etiquette"
@@ -3687,15 +3684,13 @@ function MentorGeneration() {
         { title: 'Sl No', width: 64, render: (_: any, r: any, i: number) => <span style={{ color: '#9aa1ad' }}>{r._sl ?? i + 1}</span> },
         { title: 'Mentor', render: (_: any, r: any) => <span><Avatar size={24} style={{ background: '#c2410c', marginRight: 8, fontSize: 11 }}>{(r.mentor?.full_name || '?')[0]}</Avatar>{r.mentor?.full_name || '—'}</span> },
         { title: 'Subject', render: (_: any, r: any) => r.topic?.chapter?.subject?.name || <span style={{ color: '#9aa1ad' }}>—</span> },
-        { title: 'Status', width: 150, render: (_: any, r: any) => { if (dmInactive(r)) return <Tag color="red">Inactive</Tag>; const b = dmBucket(r); return <Tag color={LIFECYCLE_COLOR[b] || (b === 'deployed' ? 'blue' : b === 'bench' ? 'cyan' : 'default')}>{BUCKET_META[b]?.label || b}</Tag> } },
-        { title: 'Etiquette rating (till date)', width: 210, render: (_: any, r: any) => {
+        { title: 'Status', width: 150, render: (_: any, r: any) => { const b = dmBucket(r); return <Tag color={LIFECYCLE_COLOR[b] || (b === 'deployed' ? 'blue' : b === 'bench' ? 'cyan' : 'default')}>{BUCKET_META[b]?.label || b}</Tag> } },
+        { title: 'Etiquette rating (till date)', width: 200, render: (_: any, r: any) => {
           const v = dailyRating[r.mentor_id]
           const ratingTag = v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'} style={{ marginInlineEnd: 0 }}>{v.toFixed(1)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span>
-          return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            {ratingTag}
-            {dmInactive(r) && <Tag color="red" style={{ marginInlineEnd: 0 }}>Inactive</Tag>}
-            {dmDeployed(r) && <Tag color="blue" style={{ marginInlineEnd: 0 }}>Deployed</Tag>}
-          </span>
+          return dmDeployed(r)
+            ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>{ratingTag}<Tag color="blue" style={{ marginInlineEnd: 0 }}>Deployed</Tag></span>
+            : ratingTag
         } },
         { title: 'Latest remark', render: (_: any, r: any) => { const rm = dailyLatestRemark(r.mentor_id); return rm ? <ATooltip title={`Given ${dayjs(rm.date).format('DD MMM YYYY')}`}><span style={{ fontSize: 12, color: '#374151' }}>{rm.text}</span></ATooltip> : <span style={{ color: '#9aa1ad' }}>—</span> } },
         { title: 'Days rated', width: 100, render: (_: any, r: any) => { const n = (dailyHistory[r.mentor_id] || []).length; return n ? <span>{n}</span> : <span style={{ color: '#9aa1ad' }}>0</span> } },
