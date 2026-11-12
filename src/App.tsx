@@ -3268,6 +3268,8 @@ function MentorGeneration() {
   const [subRemarks, setSubRemarks] = useState<any>({}) // `${mentor_id}:${scope_id}` -> latest lead remark for that sub-topic
   const [dailyRating, setDailyRating] = useState<any>({}) // mentor_id -> Daily corporate etiquette avg (general, once a day)
   const [dailyHistory, setDailyHistory] = useState<any>({}) // mentor_id -> [{ date, avg, cats:{cat:score}, remark }] daily etiquette per day
+  const [dailyQ, setDailyQ] = useState('') // Daily etiquette: search by mentor name
+  const [dailyStatus, setDailyStatus] = useState<string | null>(null) // Daily etiquette: filter by lifecycle status
   const [subjPop, setSubjPop] = useState<string | null>(null) // under-training subject-combination widget → mentor details
   const [showAssign, setShowAssign] = useState(false) // the assign-topics widget is collapsed by default
   const [treeData, setTreeData] = useState<any[]>([])
@@ -3647,8 +3649,21 @@ function MentorGeneration() {
   </Card>
   // Daily corporate etiquette — rated ONCE A DAY per mentor (not per topic). One row per mentor under training.
   const dailyMentors = Array.from(new Map((rows as any[]).filter((r: any) => r.mentor_id && r.topic).map((r: any) => [r.mentor_id, r])).values())
-  const dailyCard = <Card title="Daily corporate etiquette" extra={<span style={{ fontSize: 12, color: '#69707d' }}>Punctuality · discipline · dedication · attire · leadership — once a day per mentor</span>}>
-    <Table size="middle" rowKey={(r: any) => r.mentor_id} dataSource={withSl(dailyMentors)} pagination={{ pageSize: 20 }}
+  const dmBucket = (r: any) => { const m = mentors.find((x: any) => x.id === r.mentor_id) || r.mentor; return m ? mentorBucket(m, activeDeployedSet as Set<string>, returnedSet as Set<string>) : 'in_training' }
+  const dmDeployed = (r: any) => activeDeployedSet.has(r.mentor_id)
+  const dailyStatusOpts = [...new Set(dailyMentors.map(dmBucket))].map((k: string) => ({ value: k, label: BUCKET_META[k]?.label || k }))
+  const dailyShown = dailyMentors.filter((r: any) => {
+    const nameOk = !dailyQ.trim() || String(r.mentor?.full_name || '').toLowerCase().includes(dailyQ.trim().toLowerCase())
+    const statusOk = !dailyStatus || dmBucket(r) === dailyStatus
+    return nameOk && statusOk
+  })
+  const dailyCard = <Card title="Daily corporate etiquette"
+    extra={<span style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      <span style={{ fontSize: 12, color: '#69707d' }}>Punctuality · discipline · dedication · attire · leadership</span>
+      <Input allowClear size="small" prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search mentor…" value={dailyQ} onChange={(e) => setDailyQ(e.target.value)} style={{ width: 180 }} />
+      <Select allowClear size="small" placeholder="All statuses" style={{ width: 170 }} value={dailyStatus} onChange={(v) => setDailyStatus(v ?? null)} options={dailyStatusOpts} />
+    </span>}>
+    <Table size="middle" rowKey={(r: any) => r.mentor_id} dataSource={withSl(dailyShown)} pagination={{ pageSize: 20 }}
       expandable={{
         rowExpandable: (r: any) => (dailyHistory[r.mentor_id] || []).length > 0,
         expandedRowRender: (r: any) => {
@@ -3666,11 +3681,18 @@ function MentorGeneration() {
         { title: 'Sl No', width: 64, render: (_: any, r: any, i: number) => <span style={{ color: '#9aa1ad' }}>{r._sl ?? i + 1}</span> },
         { title: 'Mentor', render: (_: any, r: any) => <span><Avatar size={24} style={{ background: '#c2410c', marginRight: 8, fontSize: 11 }}>{(r.mentor?.full_name || '?')[0]}</Avatar>{r.mentor?.full_name || '—'}</span> },
         { title: 'Subject', render: (_: any, r: any) => r.topic?.chapter?.subject?.name || <span style={{ color: '#9aa1ad' }}>—</span> },
-        { title: 'Etiquette rating (till date)', width: 180, render: (_: any, r: any) => { const v = dailyRating[r.mentor_id]; return v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v.toFixed(1)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> } },
+        { title: 'Status', width: 150, render: (_: any, r: any) => { const b = dmBucket(r); return <Tag color={LIFECYCLE_COLOR[b] || (b === 'deployed' ? 'blue' : b === 'bench' ? 'cyan' : 'default')}>{BUCKET_META[b]?.label || b}</Tag> } },
+        { title: 'Etiquette rating (till date)', width: 200, render: (_: any, r: any) => {
+          const v = dailyRating[r.mentor_id]
+          const ratingTag = v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'} style={{ marginInlineEnd: 0 }}>{v.toFixed(1)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span>
+          return dmDeployed(r)
+            ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>{ratingTag}<Tag color="blue" style={{ marginInlineEnd: 0 }}>Deployed</Tag></span>
+            : ratingTag
+        } },
         { title: 'Days rated', width: 100, render: (_: any, r: any) => { const n = (dailyHistory[r.mentor_id] || []).length; return n ? <span>{n}</span> : <span style={{ color: '#9aa1ad' }}>0</span> } },
         { title: '', width: 120, render: (_: any, r: any) => <span style={{ display: 'flex', justifyContent: 'flex-end' }}><Button size="small" icon={<StarOutlined />} onClick={() => setRateRow({ ...r, mode: 'daily' })}>Rate</Button></span> },
       ] as any}
-      locale={{ emptyText: <Empty description="No mentors under training yet" /> }} />
+      locale={{ emptyText: <Empty description={(dailyQ.trim() || dailyStatus) ? 'No mentors match this search / status' : 'No mentors under training yet'} /> }} />
   </Card>
   // mentor's own ratings (read-only)
   const myCard = isMentor && (() => {
