@@ -5294,7 +5294,20 @@ function MentorAnalytics() {
     { title: 'Ratings', dataIndex: 'count', width: 80 },
     { title: 'First rated', dataIndex: 'first', width: 120, render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
     { title: 'Last rated', dataIndex: 'last', width: 120, render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
-    { title: 'Average rating', dataIndex: 'avg', width: 130, render: (v: number) => v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v.toFixed(2)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: 'Average rating', dataIndex: 'avg', width: 160, render: (v: number, r: any) => {
+      if (r.deployed) {
+        // deployed mentors: show the LATEST rating (most recent rated day's average), not the running average
+        const dayRows = (r.entries || []).filter((e: any) => e.rated_on === r.last)
+        const latest = dayRows.length ? dayRows.reduce((s: number, x: any) => s + Number(x.score), 0) / dayRows.length : v
+        return <ATooltip title={`Deployed — showing the latest rating${r.last ? ` (${dayjs(r.last).format('DD MMM YYYY')})` : ''}, not the running average`}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {latest != null ? <Tag color={latest >= 4 ? 'green' : latest >= 3 ? 'orange' : 'red'} style={{ marginInlineEnd: 0 }}>{latest.toFixed(2)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span>}
+            <Tag color="blue" style={{ marginInlineEnd: 0 }}>Deployed</Tag>
+          </span>
+        </ATooltip>
+      }
+      return v != null ? <Tag color={v >= 4 ? 'green' : v >= 3 ? 'orange' : 'red'}>{v.toFixed(2)} / 5</Tag> : <span style={{ color: '#9aa1ad' }}>—</span>
+    } },
   ]
   const nMentors = rows.length
   const withR = rows.filter((r: any) => r.overall != null)
