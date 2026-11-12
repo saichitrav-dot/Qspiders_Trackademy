@@ -256,7 +256,6 @@ function Shell({ children }: { children: any }) {
   const items = [
     { key: '/dashboard', icon: <BarChartOutlined />, label: 'Dashboard' },
     { key: '/', icon: <DashboardOutlined />, label: 'Command Center' },
-    { key: '/myday', icon: <ScheduleOutlined />, label: 'My Day' },
     { key: '/mywork', icon: <ProfileOutlined />, label: 'My Work' },
     { key: '/content', icon: <ApartmentOutlined />, label: 'Content' },
     { key: '/assignments', icon: <PartitionOutlined />, label: 'Assignments' },
@@ -271,7 +270,7 @@ function Shell({ children }: { children: any }) {
   ]
   // leads/managers/mentors get a consolidated "My Work" — so fold away the duplicate menus
   const consolidated = OWNER_ROLES.includes(person?.role) || person?.role === 'mentor'
-  const foldedAway = (k: string) => consolidated && (k === '/mentor' || k === '/myday' || (OWNER_ROLES.includes(person?.role) && k === '/content'))
+  const foldedAway = (k: string) => consolidated && (k === '/mentor' || (OWNER_ROLES.includes(person?.role) && k === '/content'))
   const visibleItems = items.filter((it) => (it.key !== '/assignments' || canAssign) && (it.key !== '/dashboard' || DASH_ROLES.includes(person?.role)) && !foldedAway(it.key) && (person?.role === 'admin' || !allowed || allowed[it.key] !== false))
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -4607,7 +4606,7 @@ function TeamsPerformance() {
 }
 
 /* ===================== role menu access (#3) ===================== */
-const MENU_ITEMS: [string, string][] = [['/', 'Command Center'], ['/myday', 'My Day (trainers)'], ['/mywork', 'My Work / Workspace'], ['/content', 'Content (Training topics)'], ['/assignments', 'Assignments'], ['/editing', 'Editing'], ['/goals', 'Weekly Goals'], ['/mentor', 'Mentor Management'], ['/reviews', 'Reviews'], ['/people', 'People'], ['/assets', 'Assets'], ['/manage', 'Manage']]
+const MENU_ITEMS: [string, string][] = [['/', 'Command Center'], ['/mywork', 'My Work / Workspace'], ['/content', 'Content (Training topics)'], ['/assignments', 'Assignments'], ['/editing', 'Editing'], ['/goals', 'Weekly Goals'], ['/mentor', 'Mentor Management'], ['/reviews', 'Reviews'], ['/people', 'People'], ['/assets', 'Assets'], ['/manage', 'Manage']]
 const ACCESS_ROLES = ROLES.filter(r => r !== 'admin')
 function AccessMatrix() {
   const [acc, setAcc] = useState<any>(null)
@@ -6359,7 +6358,6 @@ export default function App() {
               <Route path="/student" element={<CandidateApp />} />
               <Route path="/dashboard" element={<Protected><Shell><WorkDashboard /></Shell></Protected>} />
               <Route path="/" element={<Protected><Shell><CommandCenter /></Shell></Protected>} />
-              <Route path="/myday" element={<Protected><Shell><MyDay /></Shell></Protected>} />
               <Route path="/mywork" element={<Protected><Shell><MyWork /></Shell></Protected>} />
               <Route path="/content" element={<Protected><Shell><ContentExplorer /></Shell></Protected>} />
               <Route path="/assignments" element={<Protected><Shell><Assignments /></Shell></Protected>} />
