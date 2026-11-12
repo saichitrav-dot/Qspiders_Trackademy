@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons'
 import dayjs from 'dayjs'
 import { supabase } from './supabase'
+import { useAuth } from './App'
 
 const ACTIVITIES = ['Presentation', 'Assignment', 'Assessment', 'Mock Test']
 // Trainer/mentor rates these activities per sub-topic (Videos is student self-progress only).
@@ -438,7 +439,11 @@ function AttendanceTab({ run, pid, batches, candidates, attendance }: any) {
 // ============================================================================
 function SyllabusTab({ run, pid, syllabus }: any) {
   const { message: msg } = AntApp.useApp()
+  const { person } = useAuth() || {}
+  const isAdmin = person?.role === 'admin' // only the Program Head may delete a course
   const [f] = Form.useForm()
+  const [delModal, setDelModal] = useState<string | null>(null) // course name pending deletion
+  const [delText, setDelText] = useState('')
   const add = async (v: any) => { if (await run(() => ins('pj_syllabus', { subject_id: pid, subject: (v.subject || '').trim() || 'General', chapter: (v.chapter || '').trim() || '—', topic: (v.topic || '').trim(), subtopic: (v.subtopic || '').trim() || '—' }), 'Row added')) f.resetFields() }
   const onFile = (file: File) => {
     const reader = new FileReader()
@@ -518,13 +523,19 @@ function SyllabusTab({ run, pid, syllabus }: any) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 8 }}>
                 <div><div style={{ fontWeight: 700, fontSize: 15 }}><ReadOutlined style={{ color: PRIMARY, marginRight: 6 }} />{subj}</div>
                   <div style={{ fontSize: 12, color: '#9aa1ad', marginTop: 2 }}>{rowsOfSubject(subj).length} row{rowsOfSubject(subj).length === 1 ? '' : 's'}</div></div>
-                <Popconfirm title={`Remove “${subj}” course?`} description="Also deletes the ratings & progress recorded on its topics." okButtonProps={{ danger: true }} onConfirm={() => delSubject(subj)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm>
+                {isAdmin && <Tooltip title="Delete course (Program Head only)"><Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => { setDelText(''); setDelModal(subj) }} /></Tooltip>}
               </div>
               <Button size="small" icon={<DownloadOutlined />} style={{ marginTop: 10 }} onClick={() => downloadSubject(subj)}>Download Excel</Button>
             </Card>
           </Col>
         ))}
       </Row>}
+    <Modal open={!!delModal} title="Delete course" okText="Delete course" okButtonProps={{ danger: true, disabled: (delText || '').trim() !== (delModal || '') }}
+      onOk={async () => { const s = delModal!; setDelModal(null); await delSubject(s) }} onCancel={() => setDelModal(null)}>
+      <p style={{ marginTop: 0 }}>This permanently deletes the <b>{delModal}</b> course — all its topics, and the <b>ratings & progress</b> recorded against them. This cannot be undone.</p>
+      <p style={{ fontSize: 13, color: '#69707d', marginBottom: 6 }}>Type the course name <b>{delModal}</b> to confirm:</p>
+      <Input value={delText} onChange={(e) => setDelText(e.target.value)} placeholder={delModal || ''} autoFocus />
+    </Modal>
   </Card>
 }
 

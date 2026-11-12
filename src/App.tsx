@@ -130,7 +130,7 @@ function StageBadge({ name, seq }: { name: string; seq: number }) {
 
 /* ===================== auth ===================== */
 const AuthCtx = createContext<any>(null)
-const useAuth = () => useContext(AuthCtx)
+export const useAuth = () => useContext(AuthCtx)
 const DEVPW = 'RecTrack-shared-2026!'
 // Only this account has its own private password — the login form asks for it when this email is typed.
 const PH_EMAIL = 'saichitrav@qspiders.com'
