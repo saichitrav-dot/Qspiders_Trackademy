@@ -141,24 +141,35 @@ export default function Projects() {
 // ============================================================================
 function SubjectPerformanceDashboard({ db, onOpen }: any) {
   const norm = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+  const uniqKey = (c: any) => c.email ? 'e:' + String(c.email).toLowerCase() : 'n:' + String(c.name || '').toLowerCase()
   const rows = db.projects.map((p: any) => {
     const cands = db.candidates.filter((c: any) => c.projectId === p.id)
-    const candAvgs = cands.map((c: any) => avgRatingOf(db.ratings, c.id)).filter((a: any) => a != null) as number[]
-    const avg = candAvgs.length ? candAvgs.reduce((a, b) => a + b, 0) / candAvgs.length : null
     const org = db.orgs.find((o: any) => o.id === p.orgId)?.name || ''
     const sylRows = db.syllabus.filter((s: any) => s.projectId === p.id)
-    // Completion per candidate, against THEIR batch's covered subject (as the student sees it).
-    let possible = 0, done = 0
+    // Group records by unique PERSON (same email, else name) so a candidate who does
+    // several tech stacks in this subject isn't counted (or rated) more than once.
+    const persons = new Map<string, string[]>() // key -> their candidate ids
+    const covers = new Map<string, Set<string>>() // key -> normalized covered subjects (union across their records)
     cands.forEach((c: any) => {
-      const coverNorms = String(db.batches.find((b: any) => b.id === c.batchId)?.subject || '').split(',').map((x: string) => norm(x)).filter(Boolean)
+      const k = uniqKey(c)
+      const cids = persons.get(k) || []; cids.push(c.id); persons.set(k, cids)
+      const set = covers.get(k) || new Set<string>(); String(db.batches.find((b: any) => b.id === c.batchId)?.subject || '').split(',').map((x: string) => norm(x)).filter(Boolean).forEach((n: string) => set.add(n)); covers.set(k, set)
+    })
+    const personAvgs = [...persons.values()].map((cids) => { const rs = db.ratings.filter((r: any) => cids.includes(r.candidateId) && r.score != null); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null })
+    const ratedAvgs = personAvgs.filter((a) => a != null) as number[]
+    const avg = ratedAvgs.length ? ratedAvgs.reduce((a, b) => a + b, 0) / ratedAvgs.length : null
+    // Completion per unique person, against their covered subjects.
+    let possible = 0, done = 0
+    persons.forEach((cids, k) => {
+      const coverNorms = [...(covers.get(k) || [])]
       let candSyl = coverNorms.length ? sylRows.filter((s: any) => coverNorms.includes(norm(s.subject))) : sylRows
       if (!candSyl.length) candSyl = sylRows
       possible += candSyl.length * ACTIVITIES.length
       const ids = new Set(candSyl.map((s: any) => s.id))
-      done += db.progress.filter((pr: any) => pr.candidateId === c.id && pr.status === 'Completed' && ACTIVITIES.includes(pr.activity) && ids.has(pr.topicId)).length
+      done += db.progress.filter((pr: any) => cids.includes(pr.candidateId) && pr.status === 'Completed' && ACTIVITIES.includes(pr.activity) && ids.has(pr.topicId)).length
     })
     const comp = possible ? Math.round(100 * done / possible) : 0
-    return { id: p.id, name: p.name, org, nCand: cands.length, nRated: candAvgs.length, avg, comp }
+    return { id: p.id, name: p.name, org, nCand: persons.size, nRated: ratedAvgs.length, avg, comp }
   }).filter((r: any) => r.nCand > 0)
   if (!rows.length) return null
   const ranked = [...rows].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1))
