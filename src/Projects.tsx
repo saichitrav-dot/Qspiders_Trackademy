@@ -140,6 +140,7 @@ export default function Projects() {
 // Subject performance — which Subject's candidates are doing best (by rating)
 // ============================================================================
 function SubjectPerformanceDashboard({ db, onOpen }: any) {
+  const [showReady, setShowReady] = useState(false)
   const norm = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
   const uniqKey = (c: any) => c.email ? 'e:' + String(c.email).toLowerCase() : 'n:' + String(c.name || '').toLowerCase()
   const rows = db.projects.map((p: any) => {
@@ -175,6 +176,7 @@ function SubjectPerformanceDashboard({ db, onOpen }: any) {
   const ranked = [...rows].sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1))
   const rated = ranked.filter((r: any) => r.avg != null)
   const totalCand = rows.reduce((a: number, b: any) => a + b.nCand, 0)
+  const readyCands = [...new Map((db.candidates as any[]).filter((c: any) => c.deployReady).map((c: any) => [uniqKey(c), c])).values()]
   const barColor = (a: number) => a >= 4 ? '#16a34a' : a >= 3 ? '#d97706' : '#dc2626'
   const tagColor = (a: number) => a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'
   return <Card style={{ marginBottom: 16 }} styles={{ body: { padding: 16 } }}
@@ -191,9 +193,19 @@ function SubjectPerformanceDashboard({ db, onOpen }: any) {
               <Tag color={tagColor(rated[0].avg)} style={{ marginTop: 8 }}>Avg {rated[0].avg.toFixed(2)} / 5</Tag>
             </div>
           </Col>
-          <Col xs={12} md={7}><Stat label="Subjects rated" value={rated.length} color="#0ea5e9" /></Col>
-          <Col xs={12} md={7}><Stat label="Candidates" value={totalCand} color="#7c3aed" /></Col>
+          <Col xs={8} md={5}><Stat label="Subjects rated" value={rated.length} color="#0ea5e9" /></Col>
+          <Col xs={8} md={5}><Stat label="Candidates" value={totalCand} color="#7c3aed" /></Col>
+          <Col xs={8} md={4}><div onClick={() => readyCands.length && setShowReady(true)} style={{ cursor: readyCands.length ? 'pointer' : 'default' }} title={readyCands.length ? 'Click to see names' : ''}><Stat label="Ready to deploy" value={readyCands.length} color="#0891b2" /></div></Col>
         </Row>
+        <Modal open={showReady} title={<span>Ready for deployment · {readyCands.length}</span>} footer={null} width={560} onCancel={() => setShowReady(false)}>
+          {readyCands.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No candidates marked ready yet" />
+            : <Table size="small" rowKey="id" pagination={false} dataSource={readyCands} columns={[
+              slCol,
+              { title: 'Student', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
+              { title: 'Subject', render: (_: any, c: any) => { const n = db.projects.find((p: any) => p.id === c.projectId)?.name; return n ? <Tag color="purple">{n}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> } },
+              { title: 'Batch', width: 140, render: (_: any, c: any) => c.batch ? <Tag color="geekblue">{c.batch}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+            ] as any} />}
+        </Modal>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {ranked.map((r: any, i: number) => (
             <div key={r.id} onClick={() => onOpen?.(r.id)} title="Open subject" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', border: '1px solid #eef0f3', borderRadius: 8, cursor: 'pointer' }}>
