@@ -810,13 +810,23 @@ function DeploymentDashboard({ candidates, deployments }: any) {
 
 function SubjectDashboard({ batches, candidates, attendance, ratings, deployments, syllabus }: any) {
   const [showReady, setShowReady] = useState(false)
+  const [stackPop, setStackPop] = useState<string | null>(null)
+  const splitList = (s: any) => String(s || '').split(',').map((x: string) => x.trim()).filter(Boolean)
+  const uniqKey = (c: any) => c.email ? 'e:' + String(c.email).toLowerCase() : 'n:' + String(c.name || '').toLowerCase()
+  const uniqueStudents = new Set(candidates.map(uniqKey)).size
+  // Segregate candidates by tech stack (each batch's covered subjects). A candidate
+  // who does two stacks shows under each, but is counted once per stack (deduped by
+  // email), so the overall "Students" count stays unique rather than doubled.
+  const stackMap: Record<string, Map<string, any>> = {}
+  candidates.forEach((c: any) => { const b = batches.find((x: any) => x.id === c.batchId); splitList(b?.subject).forEach((s: string) => { (stackMap[s] = stackMap[s] || new Map()).set(uniqKey(c), c) }) })
+  const stacks = Object.keys(stackMap).sort()
   const attPct = (() => { if (!attendance.length) return null; return Math.round(100 * attendance.filter((a: any) => a.status === 'Present' || a.status === 'Late').length / attendance.length) })()
   const avgRating = (() => { const rs = ratings.filter((r: any) => r.score != null); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null })()
   const deployed = new Set(deployments.filter((d: any) => d.status === 'Deployed').map((d: any) => d.candidateId)).size
   const readyList = candidates.filter((c: any) => c.deployReady)
   return <div>
     <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
-      <Col xs={12} md={6}><Stat label="Students" value={candidates.length} color={PRIMARY} /></Col>
+      <Col xs={12} md={6}><Stat label="Students" value={uniqueStudents} color={PRIMARY} /></Col>
       <Col xs={12} md={6}><Stat label="Batches" value={batches.length} color="#2563eb" /></Col>
       <Col xs={12} md={6}><Stat label="Avg attendance" value={attPct == null ? '—' : attPct} suffix={attPct == null ? '' : '%'} color="#16a34a" /></Col>
       <Col xs={12} md={6}><Stat label="Avg rating" value={avgRating == null ? '—' : avgRating.toFixed(2)} suffix={avgRating == null ? '' : '/ 5'} color="#d97706" /></Col>
@@ -834,6 +844,28 @@ function SubjectDashboard({ batches, candidates, attendance, ratings, deployment
           { title: 'Batch', width: 140, render: (_: any, c: any) => c.batch ? <Tag color="geekblue">{c.batch}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
           { title: 'Avg rating', width: 110, align: 'center' as const, render: (_: any, c: any) => { const a = avgRatingOf(ratings, c.id); return a == null ? <span style={{ color: '#9aa1ad' }}>—</span> : <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'}>{a.toFixed(2)} / 5</Tag> } },
         ] as any} />}
+    </Modal>
+    <Card size="small" title="Candidates by tech stack" extra={<span style={{ fontSize: 12, color: '#9aa1ad' }}>{uniqueStudents} unique student{uniqueStudents === 1 ? '' : 's'} · a candidate in two stacks is counted once overall</span>} styles={{ body: { padding: 16 } }} style={{ marginBottom: 16 }}>
+      {stacks.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Set each batch's covered subject(s) to segregate candidates by tech stack." />
+        : <Row gutter={[12, 12]}>
+          {stacks.map((s) => { const list = [...stackMap[s].values()]; return (
+            <Col xs={12} sm={8} lg={6} key={s}>
+              <div onClick={() => setStackPop(s)} title="Click to see names" style={{ cursor: 'pointer', border: '1px solid #eef0f3', borderRadius: 10, padding: 14 }}>
+                <div style={{ fontSize: 12, color: '#69707d', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><ReadOutlined style={{ color: PRIMARY, marginRight: 6 }} />{s}</div>
+                <div style={{ fontSize: 24, fontWeight: 800, marginTop: 4 }}>{list.length}</div>
+                <div style={{ fontSize: 11, color: '#9aa1ad' }}>candidate{list.length === 1 ? '' : 's'}</div>
+              </div>
+            </Col>
+          ) })}
+        </Row>}
+    </Card>
+    <Modal open={!!stackPop} title={<span><Tag color="geekblue">{stackPop}</Tag> {stackPop ? stackMap[stackPop]?.size : 0} candidate{(stackPop && stackMap[stackPop]?.size === 1) ? '' : 's'}</span>} footer={null} width={540} onCancel={() => setStackPop(null)}>
+      {stackPop && <Table size="small" rowKey="id" pagination={false} dataSource={[...(stackMap[stackPop]?.values() || [])]} columns={[
+        slCol,
+        { title: 'Student', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
+        { title: 'Batch', width: 150, render: (_: any, c: any) => c.batch ? <Tag color="geekblue">{c.batch}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+        { title: 'Avg rating', width: 110, align: 'center' as const, render: (_: any, c: any) => { const a = avgRatingOf(ratings, c.id); return a == null ? <span style={{ color: '#9aa1ad' }}>—</span> : <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'}>{a.toFixed(2)} / 5</Tag> } },
+      ] as any} />}
     </Modal>
     <Card size="small" title="Deployment snapshot" styles={{ body: { padding: 16 } }} style={{ marginBottom: 16 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
