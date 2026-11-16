@@ -10,7 +10,7 @@ import { useEffect, useState, useCallback, useMemo, useRef, memo } from 'react'
 import * as XLSX from 'xlsx'
 import {
   Card, Tabs, Table, Tag, Button, Input, Modal, Form, Select, DatePicker, Empty,
-  Segmented, Popconfirm, Statistic, Row, Col, Progress, Upload, App as AntApp, Tooltip, Collapse, Spin, Tree,
+  Segmented, Popconfirm, Statistic, Row, Col, Progress, Upload, App as AntApp, Tooltip, Collapse, Spin, Tree, Switch,
 } from 'antd'
 import {
   AppstoreOutlined, PlusOutlined, TeamOutlined, CalendarOutlined, ReadOutlined, StarOutlined,
@@ -106,7 +106,7 @@ async function loadAll(): Promise<{ db: DB; err: any }> {
       orgs: o.data || [],
       projects: (s.data || []).map((x: any) => ({ id: x.id, orgId: x.org_id, name: x.name, desc: x.descr || '' })),
       batches,
-      candidates: (c.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, batchId: x.batch_id, name: x.name, email: x.email, contact: x.contact, pin: x.pin, batch: bn(x.batch_id) })),
+      candidates: (c.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, batchId: x.batch_id, name: x.name, email: x.email, contact: x.contact, pin: x.pin, batch: bn(x.batch_id), deployReady: !!x.deploy_ready })),
       syllabus: (sy.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, subject: x.subject, chapter: x.chapter, topic: x.topic, subtopic: x.subtopic })),
       ratings: (r.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, topicId: x.node_id, activity: x.activity || '', score: x.score, remark: x.remark, date: x.rated_on })),
       attendance: (a.data || []).map((x: any) => ({ id: x.id, projectId: x.subject_id, candidateId: x.candidate_id, date: x.att_date, status: x.status, remark: x.remark || '' })),
@@ -619,7 +619,7 @@ function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
   const ratedNodes = (id: string) => new Set(ratings.filter((r: any) => r.candidateId === id && r.score != null).map((r: any) => r.topicId)).size
   const summaryCols = [
     slCol,
-    { title: 'Student', dataIndex: 'name', render: (v: string, c: any) => { const a = avgRatingOf(ratings, c.id); return <span><b>{v}</b>{a != null && <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'} style={{ marginLeft: 6 }}>{a.toFixed(1)}</Tag>}</span> } },
+    { title: 'Student', dataIndex: 'name', render: (v: string, c: any) => { const a = avgRatingOf(ratings, c.id); return <span><b>{v}</b>{a != null && <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'} style={{ marginLeft: 6 }}>{a.toFixed(1)}</Tag>}{c.deployReady && <Tag color="cyan" style={{ marginLeft: 4 }}>Ready</Tag>}</span> } },
     { title: 'Rated', width: 72, render: (_: any, c: any) => <span style={{ fontSize: 12, color: '#69707d' }}>{ratedNodes(c.id)}/{syllabus.length}</span> },
     { title: '', width: 70, render: (_: any, c: any) => <Button size="small" type={cid === c.id ? 'primary' : 'default'} onClick={() => pickStudent(c.id)}>Rate</Button> },
   ]
@@ -653,7 +653,13 @@ function RatingsTab({ run, pid, candidates, syllabus, ratings }: any) {
                     </> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Pick a sub-topic on the left to rate" />}
                 </Col>
               </Row>
-              <div style={{ fontSize: 11, color: '#9aa1ad', margin: '6px 0' }}>Rate sub-topics across the tree, then Save once.</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '8px 0' }}>
+                <span style={{ fontSize: 11, color: '#9aa1ad' }}>Rate sub-topics across the tree, then Save once.</span>
+                <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>Ready for deployment</span>
+                  <Switch size="small" checked={!!candidates.find((c: any) => c.id === cid)?.deployReady} onChange={(v) => run(() => upd('pj_candidate', cid!, { deploy_ready: v }), v ? 'Marked ready for deployment' : 'Status cleared')} />
+                </span>
+              </div>
               <Button type="primary" block onClick={save}>Save ratings</Button>
             </>}
       </Card>
@@ -803,9 +809,11 @@ function DeploymentDashboard({ candidates, deployments }: any) {
 }
 
 function SubjectDashboard({ batches, candidates, attendance, ratings, deployments, syllabus }: any) {
+  const [showReady, setShowReady] = useState(false)
   const attPct = (() => { if (!attendance.length) return null; return Math.round(100 * attendance.filter((a: any) => a.status === 'Present' || a.status === 'Late').length / attendance.length) })()
   const avgRating = (() => { const rs = ratings.filter((r: any) => r.score != null); return rs.length ? rs.reduce((a: number, b: any) => a + Number(b.score), 0) / rs.length : null })()
   const deployed = new Set(deployments.filter((d: any) => d.status === 'Deployed').map((d: any) => d.candidateId)).size
+  const readyList = candidates.filter((c: any) => c.deployReady)
   return <div>
     <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
       <Col xs={12} md={6}><Stat label="Students" value={candidates.length} color={PRIMARY} /></Col>
@@ -813,10 +821,20 @@ function SubjectDashboard({ batches, candidates, attendance, ratings, deployment
       <Col xs={12} md={6}><Stat label="Avg attendance" value={attPct == null ? '—' : attPct} suffix={attPct == null ? '' : '%'} color="#16a34a" /></Col>
       <Col xs={12} md={6}><Stat label="Avg rating" value={avgRating == null ? '—' : avgRating.toFixed(2)} suffix={avgRating == null ? '' : '/ 5'} color="#d97706" /></Col>
       <Col xs={12} md={6}><Stat label="Course rows" value={syllabus.length} color="#0ea5e9" /></Col>
+      <Col xs={12} md={6}><div onClick={() => readyList.length && setShowReady(true)} style={{ cursor: readyList.length ? 'pointer' : 'default' }} title={readyList.length ? 'Click to see names' : ''}><Stat label="Ready for deployment" value={readyList.length} color="#0891b2" /></div></Col>
       <Col xs={12} md={6}><Stat label="Interviews given" value={deployments.length} color="#7c3aed" /></Col>
       <Col xs={12} md={6}><Stat label="Deployed" value={deployed} color="#16a34a" /></Col>
       <Col xs={12} md={6}><Stat label="In pipeline" value={deployments.filter((d: any) => d.status !== 'Deployed' && d.status !== 'Rejected').length} color="#ea580c" /></Col>
     </Row>
+    <Modal open={showReady} title={<span>Ready for deployment · {readyList.length}</span>} footer={null} width={520} onCancel={() => setShowReady(false)}>
+      {readyList.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No candidates marked ready yet" />
+        : <Table size="small" rowKey="id" pagination={false} dataSource={readyList} columns={[
+          slCol,
+          { title: 'Student', dataIndex: 'name', render: (v: string) => <b>{v}</b> },
+          { title: 'Batch', width: 140, render: (_: any, c: any) => c.batch ? <Tag color="geekblue">{c.batch}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+          { title: 'Avg rating', width: 110, align: 'center' as const, render: (_: any, c: any) => { const a = avgRatingOf(ratings, c.id); return a == null ? <span style={{ color: '#9aa1ad' }}>—</span> : <Tag color={a >= 4 ? 'green' : a >= 3 ? 'orange' : 'red'}>{a.toFixed(2)} / 5</Tag> } },
+        ] as any} />}
+    </Modal>
     <Card size="small" title="Deployment snapshot" styles={{ body: { padding: 16 } }} style={{ marginBottom: 16 }}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
         {DEP_STATUSES.map((s) => <Tooltip key={s} title={s}><Tag color={DEP_COLOR[s]} style={{ padding: '4px 10px', fontSize: 13 }}>{s}: <b>{deployments.filter((d: any) => d.status === s).length}</b></Tag></Tooltip>)}

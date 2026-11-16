@@ -46,6 +46,9 @@ create index if not exists ix_pj_rating_node on pj_rating(candidate_id, node_id,
 -- optional note against a day's attendance (e.g. reason for absence/leave).
 alter table pj_attendance add column if not exists remark text;
 
+-- a candidate can be flagged "Ready for deployment" from the Ratings tab.
+alter table pj_candidate add column if not exists deploy_ready boolean default false;
+
 -- ---------- RLS: signed-in staff manage everything; anon has NO direct table access ----------
 do $$ declare t text; begin
   foreach t in array array['pj_org','pj_subject','pj_batch','pj_candidate','pj_syllabus','pj_rating','pj_attendance','pj_deployment','pj_progress'] loop
