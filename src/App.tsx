@@ -2497,6 +2497,8 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   const [form, setForm] = useState<any>({})
   const [q, setQ] = useState('')
   const [typeF, setTypeF] = useState<string | null>(null) // deployed tab: filter to one deployment type (widget click)
+  const [upcoming, setUpcoming] = useState<any[]>([]) // mentor_upcoming_college rows (v42) — planned college trainings
+  const [upModal, setUpModal] = useState(false); const [upForm, setUpForm] = useState<any>({}) // add-upcoming-college modal
   const [subjF, setSubjF] = useState<string[]>([]) // subject MULTI-filter (deployed + back-to-bench tabs)
   const [fb, setFb] = useState<any>(null)     // { mentor_id, name } when the feedback-rating modal is open
   const [fbDep, setFbDep] = useState<any>(null) // the deployment (return) the feedback is for
@@ -2529,6 +2531,21 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     setBatches(b.error ? [] : (b.data || [])) // absent until v35 is applied → just no batch details
     const it = await supabase.from('mentor_internal_task').select('*').order('created_at', { ascending: false })
     setInternalTasks(it.error ? [] : (it.data || [])) // absent until v37 is applied → just no internal tasks
+    const uc = await supabase.from('mentor_upcoming_college').select('*').order('expected_date', { ascending: true })
+    setUpcoming(uc.error ? [] : (uc.data || [])) // absent until v42 is applied → no upcoming colleges
+  }
+  async function addUpcoming() {
+    const name = String(upForm.college || '').trim()
+    if (!name) { msg.warning('Enter the college name.'); return }
+    const rec: any = { college: name, expected_date: upForm.expected_date ? upForm.expected_date.format('YYYY-MM-DD') : null, note: upForm.note?.trim() || null, created_by: person?.id || null }
+    const { error } = await supabase.from('mentor_upcoming_college').insert(rec)
+    if (error) { msg.error(/mentor_upcoming_college|relation|does not exist/.test(error.message) ? 'Run RecTrack_v42_mentor_college.sql first to enable upcoming colleges.' : error.message); return }
+    setUpModal(false); setUpForm({}); msg.success('Upcoming college added ✓'); load()
+  }
+  async function deleteUpcoming(id: string) {
+    const { error } = await supabase.from('mentor_upcoming_college').delete().eq('id', id)
+    if (error) { msg.error(error.message); return }
+    msg.success('Removed'); load()
   }
   // average of the 3 deployment-feedback dimensions per mentor (to display in Back-to-bench)
   const FB_KEYS = FEEDBACK_CATS.map(c => c.key)
@@ -2544,32 +2561,22 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   useEffect(() => { load(); loadFeedback() }, [])
   function openEdit(d: any) {
     setEditId(d.id)
-    setForm({ mentor_id: d.mentor_id, subject: d.subject || '', deployment_type: d.deployment_type, college: d.college || '', from_date: d.from_date ? dayjs(d.from_date) : null, to_date: d.to_date ? dayjs(d.to_date) : null, details: d.details || '' })
+    setForm({ mentor_id: d.mentor_id, subject: d.subject || '', deployment_type: d.deployment_type, from_date: d.from_date ? dayjs(d.from_date) : null, to_date: d.to_date ? dayjs(d.to_date) : null, details: d.details || '' })
     setAdd({ mentor_id: d.mentor_id, name: nameById[d.mentor_id] })
   }
   async function submitAdd() {
     const mid = add?.mentor_id || form.mentor_id
     if (!mid) { msg.warning('Pick a mentor.'); return }
     if (!form.deployment_type) { msg.warning('Pick a deployment type.'); return }
-    const isCollege = form.deployment_type === 'College' || form.deployment_type === 'College grooming'
-    const fields: any = { mentor_id: mid, subject: form.subject || null, deployment_type: form.deployment_type, college: isCollege ? (form.college || null) : null, from_date: form.from_date ? form.from_date.format('YYYY-MM-DD') : null, to_date: form.to_date ? form.to_date.format('YYYY-MM-DD') : null, details: form.details || null }
-    const dropCollege = (o: any) => { const { college, ...rest } = o; return rest } // retry without `college` before the v42 migration is applied
+    const fields: any = { mentor_id: mid, subject: form.subject || null, deployment_type: form.deployment_type, from_date: form.from_date ? form.from_date.format('YYYY-MM-DD') : null, to_date: form.to_date ? form.to_date.format('YYYY-MM-DD') : null, details: form.details || null }
     if (editId) { // edit an existing deployment's details (does NOT change its approval status)
       if (MOCK_MENTOR_SUBTOPIC) mockUpdateDeployment(editId, fields)
-      else {
-        let { error } = await supabase.from('mentor_deployment').update({ ...fields, updated_at: new Date().toISOString() }).eq('id', editId)
-        if (error && /college/.test(error.message)) ({ error } = await supabase.from('mentor_deployment').update({ ...dropCollege(fields), updated_at: new Date().toISOString() }).eq('id', editId))
-        if (error) { msg.error(error.message); return }
-      }
+      else { const u = await supabase.from('mentor_deployment').update({ ...fields, updated_at: new Date().toISOString() }).eq('id', editId); if (u.error) { msg.error(u.error.message); return } }
       msg.success('Deployment updated ✓')
     } else {
       const rec = { ...fields, status: 'pending', requested_by: person?.id || null, approved_by: null }
       if (MOCK_MENTOR_SUBTOPIC) mockAddDeployment(rec as any)
-      else {
-        let { error } = await supabase.from('mentor_deployment').insert(rec)
-        if (error && /college/.test(error.message)) ({ error } = await supabase.from('mentor_deployment').insert(dropCollege(rec)))
-        if (error) { msg.error(/mentor_deployment|relation|does not exist/.test(error.message) ? 'Run RecTrack_v30.sql first.' : error.message); return }
-      }
+      else { const ins = await supabase.from('mentor_deployment').insert(rec); if (ins.error) { msg.error(/mentor_deployment|relation|does not exist/.test(ins.error.message) ? 'Run RecTrack_v30.sql first.' : ins.error.message); return } }
       msg.success(form.deployment_type === 'Online training' ? 'Deployment requested — expand the row to add its batches' : 'Deployment requested — pending Manager approval')
     }
     setAdd(null); setEditId(null); setForm({}); load()
@@ -2655,13 +2662,9 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     <Input placeholder="Subject (e.g. Java, Python, Testing)" value={form.subject || ''} onChange={(e) => setForm((f: any) => ({ ...f, subject: e.target.value }))} />
     <div style={lbl}>Deployed to</div>
     <Select style={{ width: '100%' }} placeholder="Branch / Online training / College / Corporate training" value={form.deployment_type} onChange={(v) => setForm((f: any) => ({ ...f, deployment_type: v }))} options={DEPLOY_TYPES.map(t => ({ value: t, label: t }))} />
-    {(form.deployment_type === 'College' || form.deployment_type === 'College grooming') && <>
-      <div style={lbl}>College</div>
-      <Input placeholder="College name" value={form.college || ''} onChange={(e) => setForm((f: any) => ({ ...f, college: e.target.value }))} />
-    </>}
     <Row gutter={8}><Col span={12}><div style={lbl}>From date</div><DatePicker style={{ width: '100%' }} value={form.from_date} onChange={(v) => setForm((f: any) => ({ ...f, from_date: v }))} /></Col><Col span={12}><div style={lbl}>To date</div><DatePicker style={{ width: '100%' }} value={form.to_date} onChange={(v) => setForm((f: any) => ({ ...f, to_date: v }))} /></Col></Row>
-    <div style={lbl}>Remarks</div>
-    <Input.TextArea rows={3} placeholder="Remarks / details (entered for the mentor)…" value={form.details || ''} onChange={(e) => setForm((f: any) => ({ ...f, details: e.target.value }))} />
+    <div style={lbl}>Remarks{(form.deployment_type === 'College' || form.deployment_type === 'College grooming') ? ' (college name)' : ''}</div>
+    <Input.TextArea rows={3} placeholder={(form.deployment_type === 'College' || form.deployment_type === 'College grooming') ? 'College name — used to group this training' : 'Remarks / details (entered for the mentor)…'} value={form.details || ''} onChange={(e) => setForm((f: any) => ({ ...f, details: e.target.value }))} />
     {form.deployment_type === 'Online training' && <div style={{ marginTop: 14, padding: '10px 12px', background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 10, fontSize: 12, color: '#69707d' }}>
       <b>Online batches</b> are added per deployment — save this, then <b>expand the row</b> on the Deployed tab to add one or more batches (a mentor can run several batches on the same date with different codes / time slots).
     </div>}
@@ -2815,7 +2818,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     { title: 'Mentor', dataIndex: 'mentor_id', render: (v: string) => <span><b>{nameById[v] || '—'}</b>{NON_MENTOR_LABEL[roleById[v]] ? <Tag color="blue" style={{ marginLeft: 6 }}>{NON_MENTOR_LABEL[roleById[v]]}</Tag> : null}</span> },
     { title: 'Employee ID', dataIndex: 'mentor_id', width: 120, render: (v: string) => empById[v] ? <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{empById[v]}</span> : <span style={{ color: '#9aa1ad' }}>—</span> },
     { title: 'Subject', dataIndex: 'subject', render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
-    { title: 'Deployed to', dataIndex: 'deployment_type', render: (v: string, d: any) => <span><Tag color="blue">{v}</Tag>{d.college ? <div style={{ fontSize: 11, color: '#69707d', marginTop: 2 }}>🎓 {d.college}</div> : null}</span> },
+    { title: 'Deployed to', dataIndex: 'deployment_type', render: (v: string) => <Tag color="blue">{v}</Tag> },
     { title: 'From', dataIndex: 'from_date', render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
     { title: 'To', dataIndex: 'to_date', render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
     { title: 'Days', width: 70, render: (_: any, d: any) => daysOf(d) },
@@ -2831,7 +2834,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   const statusRank = (s: string) => s === 'completed' ? 1 : 0 // mentors who completed training sort to the end
   const depShown = myDeps
     .filter((d: any) => (!typeF || d.deployment_type === typeF)
-      && (!ql || [nameById[d.mentor_id], empById[d.mentor_id], d.deployment_type, d.college, d.details, d.status].some((x: any) => String(x || '').toLowerCase().includes(ql)))
+      && (!ql || [nameById[d.mentor_id], empById[d.mentor_id], d.deployment_type, d.details, d.status].some((x: any) => String(x || '').toLowerCase().includes(ql)))
       && (!subjF.length || subjF.some((f: string) => subjKey(f) === subjKey(d.subject))))
     .sort((a: any, b: any) => statusRank(a.status) - statusRank(b.status))
   const depSubjOpts = (() => { const m: Record<string, string> = {}; myDeps.forEach((d: any) => { const raw = String(d.subject || '').trim(); if (raw && !m[subjKey(raw)]) m[subjKey(raw)] = raw }); return Object.values(m).sort() })()
@@ -2856,41 +2859,45 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     </Col>)}
   </Row>
   // College view: group by college first, then the mentors mapped to it (completed sort to the end).
-  const collegeGroups = (() => {
-    const g: Record<string, any[]> = {}
-    depShown.forEach((d: any) => { const c = String(d.college || '').trim() || '— College not specified —'; (g[c] = g[c] || []).push(d) })
-    return Object.keys(g).map((c) => {
-      const list = g[c]
-      const active = new Set(list.filter((d: any) => d.status === 'approved').map((d: any) => d.mentor_id)).size
-      return { college: c, list, underTraining: active > 0, active, mentorCount: new Set(list.map((d: any) => d.mentor_id)).size }
-    }).sort((a, b) => (Number(b.underTraining) - Number(a.underTraining)) || a.college.localeCompare(b.college)) // colleges under training first
-  })()
-  const collegeCols = [
-    { title: 'Sl No', width: 56, render: (_: any, r: any, i: number) => <span style={{ color: '#9aa1ad' }}>{r._sl ?? i + 1}</span> },
-    { title: 'Mentor', dataIndex: 'mentor_id', render: (v: string) => <span><b>{nameById[v] || '—'}</b>{NON_MENTOR_LABEL[roleById[v]] ? <Tag color="blue" style={{ marginLeft: 6 }}>{NON_MENTOR_LABEL[roleById[v]]}</Tag> : null}</span> },
-    { title: 'Employee ID', dataIndex: 'mentor_id', width: 110, render: (v: string) => empById[v] ? <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{empById[v]}</span> : <span style={{ color: '#9aa1ad' }}>—</span> },
-    { title: 'Subject', dataIndex: 'subject', render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
-    { title: 'From', dataIndex: 'from_date', render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
-    { title: 'To', dataIndex: 'to_date', render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
-    { title: 'Days', width: 64, render: (_: any, d: any) => daysOf(d) },
-    { title: 'Status', dataIndex: 'status', width: 140, render: (v: string) => v === 'approved' ? <Tag color="green">Deployed</Tag> : v === 'pending' ? <Tag color="orange">Pending approval</Tag> : v === 'rejected' ? <Tag color="red">Rejected</Tag> : <Tag>Completed</Tag> },
-    { title: 'Remarks', dataIndex: 'details', render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
-    { title: '', width: 260, render: (_: any, d: any) => <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-      <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(d)}>Edit</Button>
-      {d.status === 'pending' && isManager && <><Button size="small" type="primary" onClick={() => decide(d, 'approved')}>Approve</Button><Button size="small" danger onClick={() => decide(d, 'rejected')}>Reject</Button></>}
-      {d.status === 'pending' && !isManager && <span style={{ fontSize: 12, color: '#d97706' }}>Awaiting Manager</span>}
-      {d.status === 'approved' && <Button size="small" onClick={() => endDeployment(d)}>End</Button>}
-    </span> },
-  ]
-  const collegeView = collegeGroups.length === 0
-    ? <Empty description={ql ? `No College deployments match “${q}”` : 'No College deployments yet.'} />
-    : <div>{collegeGroups.map((g) => (
-      <Card key={g.college} size="small" style={{ marginBottom: 12 }}
-        title={<span style={{ color: DEPLOY_TYPE_COLOR['College'], fontWeight: 700 }}>🎓 {g.college}</span>}
-        extra={<span style={{ display: 'inline-flex', gap: 8 }}>{g.underTraining ? <Tag color="green">Under training · {g.active}</Tag> : <Tag>Completed</Tag>}<Tag color="geekblue">{g.mentorCount} mentor{g.mentorCount === 1 ? '' : 's'}</Tag></span>}>
-        <Table size="small" rowKey="id" pagination={false} columns={collegeCols as any} dataSource={withSl(g.list)} scroll={{ x: 'max-content' }} />
-      </Card>
-    ))}</div>
+  // College NAME comes from the deployment's Remarks (details). Ongoing = approved.
+  const collegeOf = (d: any) => String(d.details || '').trim() || '— College not specified —'
+  const byCollege: Record<string, { ongoing: any[]; completed: any[]; pending: any[] }> = {}
+  depShown.forEach((d: any) => { const c = collegeOf(d); const e = byCollege[c] || (byCollege[c] = { ongoing: [], completed: [], pending: [] }); (d.status === 'approved' ? e.ongoing : d.status === 'completed' ? e.completed : e.pending).push(d) })
+  const leafTitle = (d: any) => <span>{nameById[d.mentor_id] || '—'}{empById[d.mentor_id] ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad', marginLeft: 6 }}>{empById[d.mentor_id]}</span> : null}{d.subject ? <Tag color="geekblue" style={{ marginLeft: 6 }}>{d.subject}</Tag> : null}<span style={{ color: '#9aa1ad', fontSize: 12, marginLeft: 4 }}>{d.from_date ? dayjs(d.from_date).format('DD MMM') : '…'}{d.to_date ? '–' + dayjs(d.to_date).format('DD MMM') : ''} · {daysOf(d)}d</span></span>
+  const toTree = (pick: 'ongoing' | 'completed') => Object.keys(byCollege).filter((c) => byCollege[c][pick].length).sort().map((c, ci) => ({
+    key: pick + ci, selectable: false,
+    title: <span style={{ fontWeight: 700 }}>🎓 {c} <Tag color={pick === 'ongoing' ? 'green' : 'default'} style={{ marginLeft: 4 }}>{byCollege[c][pick].length}</Tag></span>,
+    children: byCollege[c][pick].map((d: any) => ({ key: d.id, isLeaf: true, title: leafTitle(d) })),
+  }))
+  const ongoingTree = toTree('ongoing'); const completedTree = toTree('completed')
+  const collegeView = <div>
+    <Card size="small" title="Ongoing college trainings" style={{ marginBottom: 12 }}
+      extra={<Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setUpForm({}); setUpModal(true) }}>Add upcoming college</Button>}>
+      {ongoingTree.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ongoing college trainings. Deploy a mentor to a college (enter the college name in Remarks)." />
+        : <Tree treeData={ongoingTree} defaultExpandAll selectable={false} showLine blockNode />}
+    </Card>
+    <Card size="small" title="Upcoming college trainings" style={{ marginBottom: 12 }}
+      extra={<Button size="small" icon={<PlusOutlined />} onClick={() => { setUpForm({}); setUpModal(true) }}>Add college</Button>}>
+      {upcoming.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No upcoming colleges yet — add a college name to track it." />
+        : <Table size="small" rowKey="id" pagination={false} dataSource={upcoming} columns={[
+          { title: 'College', dataIndex: 'college', render: (v: string) => <b>🎓 {v}</b> },
+          { title: 'Expected date', dataIndex: 'expected_date', width: 150, render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : <span style={{ color: '#9aa1ad' }}>—</span> },
+          { title: 'Note', dataIndex: 'note', render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
+          { title: '', width: 70, render: (_: any, r: any) => <Popconfirm title="Remove this upcoming college?" okText="Remove" okButtonProps={{ danger: true }} onConfirm={() => deleteUpcoming(r.id)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm> },
+        ] as any} />}
+    </Card>
+    {completedTree.length > 0 && <Card size="small" title="Completed college trainings" style={{ marginBottom: 12 }}>
+      <Tree treeData={completedTree} selectable={false} showLine blockNode />
+    </Card>}
+  </div>
+  const upModalEl = <Modal open={upModal} title="Add upcoming college training" okText="Add" onOk={addUpcoming} onCancel={() => { setUpModal(false); setUpForm({}) }} destroyOnClose>
+    <div style={lbl}>College name</div>
+    <Input placeholder="e.g. Dhanalakshmi College" value={upForm.college || ''} onChange={(e) => setUpForm((f: any) => ({ ...f, college: e.target.value }))} onPressEnter={addUpcoming} />
+    <div style={lbl}>Expected date <span style={{ color: '#9aa1ad' }}>(optional)</span></div>
+    <DatePicker style={{ width: '100%' }} value={upForm.expected_date} onChange={(v) => setUpForm((f: any) => ({ ...f, expected_date: v }))} />
+    <div style={lbl}>Note <span style={{ color: '#9aa1ad' }}>(optional)</span></div>
+    <Input.TextArea rows={2} placeholder="Any note to track…" value={upForm.note || ''} onChange={(e) => setUpForm((f: any) => ({ ...f, note: e.target.value }))} />
+  </Modal>
   return <>{typeCards}
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
       <div style={{ fontSize: 12, color: '#69707d' }}>Tap a widget above to show only that deployment type. Counts show mentors <b>currently deployed</b> (Manager-approved) per type.{typeF ? <> Showing <b>{typeF}</b> only.</> : null}</div>
@@ -2929,7 +2936,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
         },
       }}
       locale={{ emptyText: <Empty description={ql ? `No deployments match “${q}”` : 'No deployments yet — deploy a mentor from the “Back to bench” tab or add one here.'} /> }} />}
-    {addModal}{feedbackModal}{batchModal}</>
+    {addModal}{feedbackModal}{batchModal}{upModalEl}</>
 }
 
 // v34: derive a mentor's live "bucket". Deployed / bench come from mentor_deployment;
