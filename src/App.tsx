@@ -2918,26 +2918,29 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     return {
       key: pick + ci, selectable: false,
       title: <span style={{ fontWeight: 700 }}><span style={{ color: '#9aa1ad', marginRight: 4 }}>{ci + 1}.</span>🎓 {byCollege[k].name} <Tag color={pick === 'ongoing' ? 'green' : 'default'} style={{ marginLeft: 4 }}>{byCollege[k][pick].length}</Tag>{h > 0 ? <Tag color="gold">{h}h trained</Tag> : null}</span>,
-      children: byCollege[k][pick].map((d: any) => ({ key: d.id, isLeaf: true, title: leafTitle(d) })),
+      children: byCollege[k][pick].map((d: any, mi: number) => ({ key: d.id, isLeaf: true, title: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ color: '#9aa1ad' }}>{mi + 1}.</span>{leafTitle(d)}</span> })),
     }
   })
   const ongoingTree = toTree('ongoing'); const completedTree = toTree('completed')
-  const downloadHoursReport = () => {
+  const statusLabel = (s: string) => s === 'approved' ? 'Deployed (ongoing)' : s === 'completed' ? 'Completed' : s === 'pending' ? 'Pending approval' : s === 'rejected' ? 'Rejected' : s
+  const downloadCollegeReport = () => {
     const detail = collegeDeps.slice()
       .sort((a: any, b: any) => collegeName(a).localeCompare(collegeName(b)) || String(nameById[a.mentor_id] || '').localeCompare(String(nameById[b.mentor_id] || '')))
-      .map((d: any) => ({ College: collegeName(d), Trainer: nameById[d.mentor_id] || '', 'Employee ID': empById[d.mentor_id] || '', Subject: d.subject || '', From: d.from_date ? dayjs(d.from_date).format('DD MMM YYYY') : '', To: d.to_date ? dayjs(d.to_date).format('DD MMM YYYY') : '', Days: daysOf(d), Hours: d.hours != null ? Number(d.hours) : '', Remarks: d.remarks || '', Status: d.status === 'approved' ? 'Deployed' : d.status === 'completed' ? 'Completed' : d.status }))
-    const sumMap: Record<string, { College: string; trainers: Set<string>; Hours: number }> = {}
-    collegeDeps.forEach((d: any) => { const c = collegeName(d); const e = sumMap[c] || (sumMap[c] = { College: c, trainers: new Set(), Hours: 0 }); e.trainers.add(d.mentor_id); e.Hours += Number(d.hours) || 0 })
-    const summary = Object.values(sumMap).map((e) => ({ College: e.College, Trainers: e.trainers.size, 'Total hours': e.Hours })).sort((a, b) => a.College.localeCompare(b.College))
+      .map((d: any, i: number) => ({ 'Sl No': i + 1, College: collegeName(d), 'College (as entered)': String(d.details || '').trim(), Trainer: nameById[d.mentor_id] || '', 'Employee ID': empById[d.mentor_id] || '', Role: NON_MENTOR_LABEL[roleById[d.mentor_id]] || 'Mentor', Subject: d.subject || '', 'Deployment type': d.deployment_type || '', 'From': d.from_date ? dayjs(d.from_date).format('DD MMM YYYY') : '', 'To': d.to_date ? dayjs(d.to_date).format('DD MMM YYYY') : '', Days: daysOf(d), Hours: d.hours != null ? Number(d.hours) : '', Status: statusLabel(d.status), Remarks: d.remarks || '' }))
+    const sumMap: Record<string, { College: string; trainers: Set<string>; subjects: Set<string>; Ongoing: number; Completed: number; Hours: number }> = {}
+    collegeDeps.forEach((d: any) => { const c = collegeName(d); const e = sumMap[c] || (sumMap[c] = { College: c, trainers: new Set(), subjects: new Set(), Ongoing: 0, Completed: 0, Hours: 0 }); e.trainers.add(d.mentor_id); if (d.subject) e.subjects.add(d.subject); if (d.status === 'approved') e.Ongoing++; if (d.status === 'completed') e.Completed++; e.Hours += Number(d.hours) || 0 })
+    const summary = Object.values(sumMap).map((e, i) => ({ 'Sl No': i + 1, College: e.College, Trainers: e.trainers.size, Subjects: [...e.subjects].join(', '), 'Ongoing': e.Ongoing, 'Completed': e.Completed, 'Total hours': e.Hours })).sort((a, b) => a.College.localeCompare(b.College))
+    const upc = (upcoming || []).map((u: any, i: number) => ({ 'Sl No': i + 1, College: u.college || '', 'Expected date': u.expected_date ? dayjs(u.expected_date).format('DD MMM YYYY') : '', Note: u.note || '' }))
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), 'Hours by college')
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), 'Detail')
-    XLSX.writeFile(wb, `Trackademy_college_hours_${dayjs().format('YYYY-MM-DD')}.xlsx`)
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), 'By college')
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), 'Trainings detail')
+    if (upc.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(upc), 'Upcoming colleges')
+    XLSX.writeFile(wb, `Trackademy_college_report_${dayjs().format('YYYY-MM-DD')}.xlsx`)
   }
   const collegeView = <div>
     <Card size="small" title="Ongoing college trainings" style={{ marginBottom: 12 }}
       extra={<span style={{ display: 'inline-flex', gap: 8 }}>
-        <Button size="small" icon={<DownloadOutlined />} onClick={downloadHoursReport} disabled={collegeDeps.length === 0}>Download hours report</Button>
+        <Button size="small" icon={<DownloadOutlined />} onClick={downloadCollegeReport} disabled={collegeDeps.length === 0}>Download college report</Button>
         <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setUpForm({}); setUpModal(true) }}>Add upcoming college</Button>
       </span>}>
       {ongoingTree.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ongoing college trainings. Deploy a mentor to a college (enter the college name in Remarks)." />
