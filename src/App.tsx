@@ -2561,20 +2561,21 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   useEffect(() => { load(); loadFeedback() }, [])
   function openEdit(d: any) {
     setEditId(d.id)
-    setForm({ mentor_id: d.mentor_id, subject: d.subject || '', deployment_type: d.deployment_type, remarks: d.remarks || '', from_date: d.from_date ? dayjs(d.from_date) : null, to_date: d.to_date ? dayjs(d.to_date) : null, details: d.details || '' })
+    setForm({ mentor_id: d.mentor_id, subject: d.subject || '', deployment_type: d.deployment_type, remarks: d.remarks || '', hours: d.hours ?? '', from_date: d.from_date ? dayjs(d.from_date) : null, to_date: d.to_date ? dayjs(d.to_date) : null, details: d.details || '' })
     setAdd({ mentor_id: d.mentor_id, name: nameById[d.mentor_id] })
   }
   async function submitAdd() {
     const mid = add?.mentor_id || form.mentor_id
     if (!mid) { msg.warning('Pick a mentor.'); return }
     if (!form.deployment_type) { msg.warning('Pick a deployment type.'); return }
-    const fields: any = { mentor_id: mid, subject: form.subject || null, deployment_type: form.deployment_type, remarks: form.remarks || null, from_date: form.from_date ? form.from_date.format('YYYY-MM-DD') : null, to_date: form.to_date ? form.to_date.format('YYYY-MM-DD') : null, details: form.details || null }
-    const dropRemarks = (o: any) => { const { remarks, ...rest } = o; return rest } // retry without `remarks` before v42 is applied
+    const hoursVal = form.hours === '' || form.hours == null ? null : Number(form.hours)
+    const fields: any = { mentor_id: mid, subject: form.subject || null, deployment_type: form.deployment_type, remarks: form.remarks || null, hours: Number.isFinite(hoursVal as number) ? hoursVal : null, from_date: form.from_date ? form.from_date.format('YYYY-MM-DD') : null, to_date: form.to_date ? form.to_date.format('YYYY-MM-DD') : null, details: form.details || null }
+    const dropNew = (o: any) => { const { remarks, hours, ...rest } = o; return rest } // retry without v42 columns (remarks / hours) before the migration is applied
     if (editId) { // edit an existing deployment's details (does NOT change its approval status)
       if (MOCK_MENTOR_SUBTOPIC) mockUpdateDeployment(editId, fields)
       else {
         let { error } = await supabase.from('mentor_deployment').update({ ...fields, updated_at: new Date().toISOString() }).eq('id', editId)
-        if (error && /remarks/.test(error.message)) ({ error } = await supabase.from('mentor_deployment').update({ ...dropRemarks(fields), updated_at: new Date().toISOString() }).eq('id', editId))
+        if (error && /remarks|hours/.test(error.message)) ({ error } = await supabase.from('mentor_deployment').update({ ...dropNew(fields), updated_at: new Date().toISOString() }).eq('id', editId))
         if (error) { msg.error(error.message); return }
       }
       msg.success('Deployment updated ✓')
@@ -2583,7 +2584,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
       if (MOCK_MENTOR_SUBTOPIC) mockAddDeployment(rec as any)
       else {
         let { error } = await supabase.from('mentor_deployment').insert(rec)
-        if (error && /remarks/.test(error.message)) ({ error } = await supabase.from('mentor_deployment').insert(dropRemarks(rec)))
+        if (error && /remarks|hours/.test(error.message)) ({ error } = await supabase.from('mentor_deployment').insert(dropNew(rec)))
         if (error) { msg.error(/mentor_deployment|relation|does not exist/.test(error.message) ? 'Run RecTrack_v30.sql first.' : error.message); return }
       }
       msg.success(form.deployment_type === 'Online training' ? 'Deployment requested — expand the row to add its batches' : 'Deployment requested — pending Manager approval')
@@ -2673,8 +2674,10 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     <Select style={{ width: '100%' }} placeholder="Branch / Online training / College / Corporate training" value={form.deployment_type} onChange={(v) => setForm((f: any) => ({ ...f, deployment_type: v }))} options={DEPLOY_TYPES.map(t => ({ value: t, label: t }))} />
     <Row gutter={8}><Col span={12}><div style={lbl}>From date</div><DatePicker style={{ width: '100%' }} value={form.from_date} onChange={(v) => setForm((f: any) => ({ ...f, from_date: v }))} /></Col><Col span={12}><div style={lbl}>To date</div><DatePicker style={{ width: '100%' }} value={form.to_date} onChange={(v) => setForm((f: any) => ({ ...f, to_date: v }))} /></Col></Row>
     {(form.deployment_type === 'College' || form.deployment_type === 'College grooming') ? <>
-      <div style={lbl}>College name</div>
-      <Input placeholder="College name — groups this training" value={form.details || ''} onChange={(e) => setForm((f: any) => ({ ...f, details: e.target.value }))} />
+      <Row gutter={8}>
+        <Col span={14}><div style={lbl}>College name</div><Input placeholder="College name — groups this training" value={form.details || ''} onChange={(e) => setForm((f: any) => ({ ...f, details: e.target.value }))} /></Col>
+        <Col span={10}><div style={lbl}>Hours trained</div><Input type="number" min={0} placeholder="e.g. 40" value={form.hours ?? ''} onChange={(e) => setForm((f: any) => ({ ...f, hours: e.target.value }))} /></Col>
+      </Row>
       <div style={lbl}>Remarks</div>
       <Input.TextArea rows={2} placeholder="Remarks / notes about this college training…" value={form.remarks || ''} onChange={(e) => setForm((f: any) => ({ ...f, remarks: e.target.value }))} />
     </> : <>
@@ -2877,19 +2880,31 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   // College view: group by college first, then the mentors mapped to it (completed sort to the end).
   // College NAME comes from the deployment's Remarks (details). Ongoing = approved.
   const collegeOf = (d: any) => String(d.details || '').trim() || '— College not specified —'
-  const byCollege: Record<string, { ongoing: any[]; completed: any[]; pending: any[] }> = {}
-  depShown.forEach((d: any) => { const c = collegeOf(d); const e = byCollege[c] || (byCollege[c] = { ongoing: [], completed: [], pending: [] }); (d.status === 'approved' ? e.ongoing : d.status === 'completed' ? e.completed : e.pending).push(d) })
+  // Group colleges case/space/punctuation-insensitively so the same college typed
+  // differently (e.g. "ABC College" vs "abc  college") collapses into ONE, displayed
+  // with its most-used spelling, and all its mentors/subjects sit under it.
+  const normCollege = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+  const byCollege: Record<string, { name: string; ongoing: any[]; completed: any[]; pending: any[] }> = {}
+  const nameTally: Record<string, Record<string, number>> = {}
+  depShown.forEach((d: any) => {
+    const raw = collegeOf(d); const k = normCollege(raw) || '__none'
+    const e = byCollege[k] || (byCollege[k] = { name: raw, ongoing: [], completed: [], pending: [] })
+    const t = nameTally[k] || (nameTally[k] = {}); t[raw] = (t[raw] || 0) + 1
+    if (t[raw] > (t[e.name] || 0)) e.name = raw // display the most frequent spelling
+    ;(d.status === 'approved' ? e.ongoing : d.status === 'completed' ? e.completed : e.pending).push(d)
+  })
+  const collegeName = (d: any) => byCollege[normCollege(collegeOf(d)) || '__none']?.name || collegeOf(d)
   const leafTitle = (d: any) => <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-    <span>{nameById[d.mentor_id] || '—'}{empById[d.mentor_id] ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad', marginLeft: 6 }}>{empById[d.mentor_id]}</span> : null}{d.subject ? <Tag color="geekblue" style={{ marginLeft: 6 }}>{d.subject}</Tag> : null}<span style={{ color: '#9aa1ad', fontSize: 12, marginLeft: 4 }}>{d.from_date ? dayjs(d.from_date).format('DD MMM') : '…'}{d.to_date ? '–' + dayjs(d.to_date).format('DD MMM') : ''} · {daysOf(d)}d</span>{d.remarks ? <span style={{ color: '#69707d', fontSize: 12, marginLeft: 6 }}>· {d.remarks}</span> : null}</span>
+    <span>{nameById[d.mentor_id] || '—'}{empById[d.mentor_id] ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad', marginLeft: 6 }}>{empById[d.mentor_id]}</span> : null}{d.subject ? <Tag color="geekblue" style={{ marginLeft: 6 }}>{d.subject}</Tag> : null}<span style={{ color: '#9aa1ad', fontSize: 12, marginLeft: 4 }}>{d.from_date ? dayjs(d.from_date).format('DD MMM') : '…'}{d.to_date ? '–' + dayjs(d.to_date).format('DD MMM') : ''} · {daysOf(d)}d</span>{d.hours != null ? <Tag color="gold" style={{ marginLeft: 6 }}>{d.hours}h</Tag> : null}{d.remarks ? <span style={{ color: '#69707d', fontSize: 12, marginLeft: 6 }}>· {d.remarks}</span> : null}</span>
     {d.status === 'approved' && <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex', gap: 6 }}>
       <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(d)} title="Edit details" />
       <Popconfirm title="End this college training?" okText="End" onConfirm={() => endDeployment(d)}><Button size="small">End training</Button></Popconfirm>
     </span>}
   </span>
-  const toTree = (pick: 'ongoing' | 'completed') => Object.keys(byCollege).filter((c) => byCollege[c][pick].length).sort().map((c, ci) => ({
+  const toTree = (pick: 'ongoing' | 'completed') => Object.keys(byCollege).filter((k) => byCollege[k][pick].length).sort((a, b) => byCollege[a].name.localeCompare(byCollege[b].name)).map((k, ci) => ({
     key: pick + ci, selectable: false,
-    title: <span style={{ fontWeight: 700 }}><span style={{ color: '#9aa1ad', marginRight: 4 }}>{ci + 1}.</span>🎓 {c} <Tag color={pick === 'ongoing' ? 'green' : 'default'} style={{ marginLeft: 4 }}>{byCollege[c][pick].length}</Tag></span>,
-    children: byCollege[c][pick].map((d: any) => ({ key: d.id, isLeaf: true, title: leafTitle(d) })),
+    title: <span style={{ fontWeight: 700 }}><span style={{ color: '#9aa1ad', marginRight: 4 }}>{ci + 1}.</span>🎓 {byCollege[k].name} <Tag color={pick === 'ongoing' ? 'green' : 'default'} style={{ marginLeft: 4 }}>{byCollege[k][pick].length}</Tag></span>,
+    children: byCollege[k][pick].map((d: any) => ({ key: d.id, isLeaf: true, title: leafTitle(d) })),
   }))
   const ongoingTree = toTree('ongoing'); const completedTree = toTree('completed')
   const collegeView = <div>
@@ -2898,6 +2913,24 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
       {ongoingTree.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ongoing college trainings. Deploy a mentor to a college (enter the college name in Remarks)." />
         : <Tree treeData={ongoingTree} defaultExpandAll selectable={false} showLine blockNode />}
     </Card>
+    {(() => {
+      const hourRows = depShown.slice().sort((a: any, b: any) => collegeName(a).localeCompare(collegeName(b)) || String(nameById[a.mentor_id] || '').localeCompare(String(nameById[b.mentor_id] || '')))
+      const totalHours = hourRows.reduce((s: number, d: any) => s + (Number(d.hours) || 0), 0)
+      return <Card size="small" title="Hours trained by trainer" extra={<Tag color="gold">Total {totalHours}h</Tag>} style={{ marginBottom: 12 }}>
+        {hourRows.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No college trainings yet." />
+          : <Table size="small" rowKey="id" pagination={false} scroll={{ x: 'max-content' }} dataSource={withSl(hourRows)} columns={[
+            { title: 'Sl No', width: 56, render: (_: any, r: any, i: number) => <span style={{ color: '#9aa1ad' }}>{r._sl ?? i + 1}</span> },
+            { title: 'College', render: (_: any, d: any) => <b>🎓 {collegeName(d)}</b> },
+            { title: 'Trainer', render: (_: any, d: any) => <span><b>{nameById[d.mentor_id] || '—'}</b>{empById[d.mentor_id] ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad', marginLeft: 6 }}>{empById[d.mentor_id]}</span> : null}</span> },
+            { title: 'Subject', dataIndex: 'subject', render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+            { title: 'From', dataIndex: 'from_date', width: 110, render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
+            { title: 'To', dataIndex: 'to_date', width: 110, render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
+            { title: 'Days', width: 60, render: (_: any, d: any) => daysOf(d) },
+            { title: 'Hours', width: 90, align: 'right' as const, render: (_: any, d: any) => d.hours != null ? <Tag color="gold" style={{ fontWeight: 700 }}>{d.hours}h</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+            { title: 'Status', dataIndex: 'status', width: 130, render: (v: string) => v === 'approved' ? <Tag color="green">Deployed</Tag> : v === 'completed' ? <Tag>Completed</Tag> : v === 'pending' ? <Tag color="orange">Pending</Tag> : <Tag color="red">Rejected</Tag> },
+          ] as any} />}
+      </Card>
+    })()}
     <Card size="small" title="Upcoming college trainings" style={{ marginBottom: 12 }}
       extra={<Button size="small" icon={<PlusOutlined />} onClick={() => { setUpForm({}); setUpModal(true) }}>Add college</Button>}>
       {upcoming.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No upcoming colleges yet — add a college name to track it." />

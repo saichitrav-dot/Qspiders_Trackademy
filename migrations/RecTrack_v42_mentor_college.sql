@@ -10,6 +10,8 @@
 
 -- dedicated remarks on a deployment (the college NAME is taken from `details`).
 alter table mentor_deployment add column if not exists remarks text;
+-- hours trained by the trainer on this (college) deployment.
+alter table mentor_deployment add column if not exists hours numeric;
 
 create table if not exists mentor_upcoming_college (
   id uuid primary key default gen_random_uuid(),
