@@ -2912,36 +2912,37 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
       <Popconfirm title="End this college training?" okText="End" onConfirm={() => endDeployment(d)}><Button size="small">End training</Button></Popconfirm>
     </span>}
   </span>
-  const toTree = (pick: 'ongoing' | 'completed') => Object.keys(byCollege).filter((k) => byCollege[k][pick].length).sort((a, b) => byCollege[a].name.localeCompare(byCollege[b].name)).map((k, ci) => ({
-    key: pick + ci, selectable: false,
-    title: <span style={{ fontWeight: 700 }}><span style={{ color: '#9aa1ad', marginRight: 4 }}>{ci + 1}.</span>🎓 {byCollege[k].name} <Tag color={pick === 'ongoing' ? 'green' : 'default'} style={{ marginLeft: 4 }}>{byCollege[k][pick].length}</Tag></span>,
-    children: byCollege[k][pick].map((d: any) => ({ key: d.id, isLeaf: true, title: leafTitle(d) })),
-  }))
+  const sumHours = (list: any[]) => list.reduce((s: number, d: any) => s + (Number(d.hours) || 0), 0)
+  const toTree = (pick: 'ongoing' | 'completed') => Object.keys(byCollege).filter((k) => byCollege[k][pick].length).sort((a, b) => byCollege[a].name.localeCompare(byCollege[b].name)).map((k, ci) => {
+    const h = sumHours(byCollege[k][pick])
+    return {
+      key: pick + ci, selectable: false,
+      title: <span style={{ fontWeight: 700 }}><span style={{ color: '#9aa1ad', marginRight: 4 }}>{ci + 1}.</span>🎓 {byCollege[k].name} <Tag color={pick === 'ongoing' ? 'green' : 'default'} style={{ marginLeft: 4 }}>{byCollege[k][pick].length}</Tag>{h > 0 ? <Tag color="gold">{h}h trained</Tag> : null}</span>,
+      children: byCollege[k][pick].map((d: any) => ({ key: d.id, isLeaf: true, title: leafTitle(d) })),
+    }
+  })
   const ongoingTree = toTree('ongoing'); const completedTree = toTree('completed')
+  const downloadHoursReport = () => {
+    const detail = collegeDeps.slice()
+      .sort((a: any, b: any) => collegeName(a).localeCompare(collegeName(b)) || String(nameById[a.mentor_id] || '').localeCompare(String(nameById[b.mentor_id] || '')))
+      .map((d: any) => ({ College: collegeName(d), Trainer: nameById[d.mentor_id] || '', 'Employee ID': empById[d.mentor_id] || '', Subject: d.subject || '', From: d.from_date ? dayjs(d.from_date).format('DD MMM YYYY') : '', To: d.to_date ? dayjs(d.to_date).format('DD MMM YYYY') : '', Days: daysOf(d), Hours: d.hours != null ? Number(d.hours) : '', Remarks: d.remarks || '', Status: d.status === 'approved' ? 'Deployed' : d.status === 'completed' ? 'Completed' : d.status }))
+    const sumMap: Record<string, { College: string; trainers: Set<string>; Hours: number }> = {}
+    collegeDeps.forEach((d: any) => { const c = collegeName(d); const e = sumMap[c] || (sumMap[c] = { College: c, trainers: new Set(), Hours: 0 }); e.trainers.add(d.mentor_id); e.Hours += Number(d.hours) || 0 })
+    const summary = Object.values(sumMap).map((e) => ({ College: e.College, Trainers: e.trainers.size, 'Total hours': e.Hours })).sort((a, b) => a.College.localeCompare(b.College))
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), 'Hours by college')
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), 'Detail')
+    XLSX.writeFile(wb, `Trackademy_college_hours_${dayjs().format('YYYY-MM-DD')}.xlsx`)
+  }
   const collegeView = <div>
     <Card size="small" title="Ongoing college trainings" style={{ marginBottom: 12 }}
-      extra={<Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setUpForm({}); setUpModal(true) }}>Add upcoming college</Button>}>
+      extra={<span style={{ display: 'inline-flex', gap: 8 }}>
+        <Button size="small" icon={<DownloadOutlined />} onClick={downloadHoursReport} disabled={collegeDeps.length === 0}>Download hours report</Button>
+        <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setUpForm({}); setUpModal(true) }}>Add upcoming college</Button>
+      </span>}>
       {ongoingTree.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ongoing college trainings. Deploy a mentor to a college (enter the college name in Remarks)." />
         : <Tree treeData={ongoingTree} defaultExpandAll selectable={false} showLine blockNode />}
     </Card>
-    {(() => {
-      const hourRows = collegeDeps.slice().sort((a: any, b: any) => collegeName(a).localeCompare(collegeName(b)) || String(nameById[a.mentor_id] || '').localeCompare(String(nameById[b.mentor_id] || '')))
-      const totalHours = hourRows.reduce((s: number, d: any) => s + (Number(d.hours) || 0), 0)
-      return <Card size="small" title="Hours trained by trainer" extra={<Tag color="gold">Total {totalHours}h</Tag>} style={{ marginBottom: 12 }}>
-        {hourRows.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No college trainings yet." />
-          : <Table size="small" rowKey="id" pagination={false} scroll={{ x: 'max-content' }} dataSource={withSl(hourRows)} columns={[
-            { title: 'Sl No', width: 56, render: (_: any, r: any, i: number) => <span style={{ color: '#9aa1ad' }}>{r._sl ?? i + 1}</span> },
-            { title: 'College', render: (_: any, d: any) => <b>🎓 {collegeName(d)}</b> },
-            { title: 'Trainer', render: (_: any, d: any) => <span><b>{nameById[d.mentor_id] || '—'}</b>{empById[d.mentor_id] ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad', marginLeft: 6 }}>{empById[d.mentor_id]}</span> : null}</span> },
-            { title: 'Subject', dataIndex: 'subject', render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
-            { title: 'From', dataIndex: 'from_date', width: 110, render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
-            { title: 'To', dataIndex: 'to_date', width: 110, render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
-            { title: 'Days', width: 60, render: (_: any, d: any) => daysOf(d) },
-            { title: 'Hours', width: 90, align: 'right' as const, render: (_: any, d: any) => d.hours != null ? <Tag color="gold" style={{ fontWeight: 700 }}>{d.hours}h</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
-            { title: 'Status', dataIndex: 'status', width: 130, render: (v: string) => v === 'approved' ? <Tag color="green">Deployed</Tag> : v === 'completed' ? <Tag>Completed</Tag> : v === 'pending' ? <Tag color="orange">Pending</Tag> : <Tag color="red">Rejected</Tag> },
-          ] as any} />}
-      </Card>
-    })()}
     <Card size="small" title="Upcoming college trainings" style={{ marginBottom: 12 }}
       extra={<Button size="small" icon={<PlusOutlined />} onClick={() => { setUpForm({}); setUpModal(true) }}>Add college</Button>}>
       {upcoming.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No upcoming colleges yet — add a college name to track it." />
