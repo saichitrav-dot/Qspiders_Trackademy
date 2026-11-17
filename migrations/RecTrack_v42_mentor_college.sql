@@ -8,6 +8,9 @@
 --  Idempotent / safe to re-run. Run once in the Supabase SQL editor.
 -- ============================================================================
 
+-- dedicated remarks on a deployment (the college NAME is taken from `details`).
+alter table mentor_deployment add column if not exists remarks text;
+
 create table if not exists mentor_upcoming_college (
   id uuid primary key default gen_random_uuid(),
   college text not null,
