@@ -2913,11 +2913,14 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     </span>}
   </span>
   const sumHours = (list: any[]) => list.reduce((s: number, d: any) => s + (Number(d.hours) || 0), 0)
+  // Hours are CUMULATIVE per college — all its trainings (ongoing + completed + pending),
+  // so completed hours keep reflecting and a resumed/new training adds on top.
+  const totalHoursOf = (k: string) => sumHours([...byCollege[k].ongoing, ...byCollege[k].completed, ...byCollege[k].pending])
   const toTree = (pick: 'ongoing' | 'completed') => Object.keys(byCollege).filter((k) => byCollege[k][pick].length).sort((a, b) => byCollege[a].name.localeCompare(byCollege[b].name)).map((k, ci) => {
-    const h = sumHours(byCollege[k][pick])
+    const h = totalHoursOf(k)
     return {
       key: pick + ci, selectable: false,
-      title: <span style={{ fontWeight: 700 }}><span style={{ color: '#9aa1ad', marginRight: 4 }}>{ci + 1}.</span>🎓 {byCollege[k].name} <Tag color={pick === 'ongoing' ? 'green' : 'default'} style={{ marginLeft: 4 }}>{byCollege[k][pick].length}</Tag>{h > 0 ? <Tag color="gold">{h}h trained</Tag> : null}</span>,
+      title: <span style={{ fontWeight: 700 }}><span style={{ color: '#9aa1ad', marginRight: 4 }}>{ci + 1}.</span>🎓 {byCollege[k].name} <Tag color={pick === 'ongoing' ? 'green' : 'default'} style={{ marginLeft: 4 }}>{byCollege[k][pick].length}</Tag>{h > 0 ? <Tag color="gold">{h}h trained (total)</Tag> : null}</span>,
       children: byCollege[k][pick].map((d: any, mi: number) => ({ key: d.id, isLeaf: true, title: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ color: '#9aa1ad' }}>{mi + 1}.</span>{leafTitle(d)}</span> })),
     }
   })
