@@ -2496,6 +2496,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   const [editId, setEditId] = useState<string | null>(null) // deployment being edited (null = new request)
   const [form, setForm] = useState<any>({})
   const [q, setQ] = useState('')
+  const [typeF, setTypeF] = useState<string | null>(null) // deployed tab: filter to one deployment type (widget click)
   const [subjF, setSubjF] = useState<string[]>([]) // subject MULTI-filter (deployed + back-to-bench tabs)
   const [fb, setFb] = useState<any>(null)     // { mentor_id, name } when the feedback-rating modal is open
   const [fbDep, setFbDep] = useState<any>(null) // the deployment (return) the feedback is for
@@ -2543,22 +2544,32 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   useEffect(() => { load(); loadFeedback() }, [])
   function openEdit(d: any) {
     setEditId(d.id)
-    setForm({ mentor_id: d.mentor_id, subject: d.subject || '', deployment_type: d.deployment_type, from_date: d.from_date ? dayjs(d.from_date) : null, to_date: d.to_date ? dayjs(d.to_date) : null, details: d.details || '' })
+    setForm({ mentor_id: d.mentor_id, subject: d.subject || '', deployment_type: d.deployment_type, college: d.college || '', from_date: d.from_date ? dayjs(d.from_date) : null, to_date: d.to_date ? dayjs(d.to_date) : null, details: d.details || '' })
     setAdd({ mentor_id: d.mentor_id, name: nameById[d.mentor_id] })
   }
   async function submitAdd() {
     const mid = add?.mentor_id || form.mentor_id
     if (!mid) { msg.warning('Pick a mentor.'); return }
     if (!form.deployment_type) { msg.warning('Pick a deployment type.'); return }
-    const fields: any = { mentor_id: mid, subject: form.subject || null, deployment_type: form.deployment_type, from_date: form.from_date ? form.from_date.format('YYYY-MM-DD') : null, to_date: form.to_date ? form.to_date.format('YYYY-MM-DD') : null, details: form.details || null }
+    const isCollege = form.deployment_type === 'College' || form.deployment_type === 'College grooming'
+    const fields: any = { mentor_id: mid, subject: form.subject || null, deployment_type: form.deployment_type, college: isCollege ? (form.college || null) : null, from_date: form.from_date ? form.from_date.format('YYYY-MM-DD') : null, to_date: form.to_date ? form.to_date.format('YYYY-MM-DD') : null, details: form.details || null }
+    const dropCollege = (o: any) => { const { college, ...rest } = o; return rest } // retry without `college` before the v42 migration is applied
     if (editId) { // edit an existing deployment's details (does NOT change its approval status)
       if (MOCK_MENTOR_SUBTOPIC) mockUpdateDeployment(editId, fields)
-      else { const u = await supabase.from('mentor_deployment').update({ ...fields, updated_at: new Date().toISOString() }).eq('id', editId); if (u.error) { msg.error(u.error.message); return } }
+      else {
+        let { error } = await supabase.from('mentor_deployment').update({ ...fields, updated_at: new Date().toISOString() }).eq('id', editId)
+        if (error && /college/.test(error.message)) ({ error } = await supabase.from('mentor_deployment').update({ ...dropCollege(fields), updated_at: new Date().toISOString() }).eq('id', editId))
+        if (error) { msg.error(error.message); return }
+      }
       msg.success('Deployment updated ✓')
     } else {
       const rec = { ...fields, status: 'pending', requested_by: person?.id || null, approved_by: null }
       if (MOCK_MENTOR_SUBTOPIC) mockAddDeployment(rec as any)
-      else { const ins = await supabase.from('mentor_deployment').insert(rec); if (ins.error) { msg.error(/mentor_deployment|relation|does not exist/.test(ins.error.message) ? 'Run RecTrack_v30.sql first.' : ins.error.message); return } }
+      else {
+        let { error } = await supabase.from('mentor_deployment').insert(rec)
+        if (error && /college/.test(error.message)) ({ error } = await supabase.from('mentor_deployment').insert(dropCollege(rec)))
+        if (error) { msg.error(/mentor_deployment|relation|does not exist/.test(error.message) ? 'Run RecTrack_v30.sql first.' : error.message); return }
+      }
       msg.success(form.deployment_type === 'Online training' ? 'Deployment requested — expand the row to add its batches' : 'Deployment requested — pending Manager approval')
     }
     setAdd(null); setEditId(null); setForm({}); load()
@@ -2644,9 +2655,13 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     <Input placeholder="Subject (e.g. Java, Python, Testing)" value={form.subject || ''} onChange={(e) => setForm((f: any) => ({ ...f, subject: e.target.value }))} />
     <div style={lbl}>Deployed to</div>
     <Select style={{ width: '100%' }} placeholder="Branch / Online training / College / Corporate training" value={form.deployment_type} onChange={(v) => setForm((f: any) => ({ ...f, deployment_type: v }))} options={DEPLOY_TYPES.map(t => ({ value: t, label: t }))} />
+    {(form.deployment_type === 'College' || form.deployment_type === 'College grooming') && <>
+      <div style={lbl}>College</div>
+      <Input placeholder="College name" value={form.college || ''} onChange={(e) => setForm((f: any) => ({ ...f, college: e.target.value }))} />
+    </>}
     <Row gutter={8}><Col span={12}><div style={lbl}>From date</div><DatePicker style={{ width: '100%' }} value={form.from_date} onChange={(v) => setForm((f: any) => ({ ...f, from_date: v }))} /></Col><Col span={12}><div style={lbl}>To date</div><DatePicker style={{ width: '100%' }} value={form.to_date} onChange={(v) => setForm((f: any) => ({ ...f, to_date: v }))} /></Col></Row>
-    <div style={lbl}>Details</div>
-    <Input.TextArea rows={3} placeholder="Deployment details (entered for the mentor)…" value={form.details || ''} onChange={(e) => setForm((f: any) => ({ ...f, details: e.target.value }))} />
+    <div style={lbl}>Remarks</div>
+    <Input.TextArea rows={3} placeholder="Remarks / details (entered for the mentor)…" value={form.details || ''} onChange={(e) => setForm((f: any) => ({ ...f, details: e.target.value }))} />
     {form.deployment_type === 'Online training' && <div style={{ marginTop: 14, padding: '10px 12px', background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 10, fontSize: 12, color: '#69707d' }}>
       <b>Online batches</b> are added per deployment — save this, then <b>expand the row</b> on the Deployed tab to add one or more batches (a mentor can run several batches on the same date with different codes / time slots).
     </div>}
@@ -2800,11 +2815,11 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     { title: 'Mentor', dataIndex: 'mentor_id', render: (v: string) => <span><b>{nameById[v] || '—'}</b>{NON_MENTOR_LABEL[roleById[v]] ? <Tag color="blue" style={{ marginLeft: 6 }}>{NON_MENTOR_LABEL[roleById[v]]}</Tag> : null}</span> },
     { title: 'Employee ID', dataIndex: 'mentor_id', width: 120, render: (v: string) => empById[v] ? <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{empById[v]}</span> : <span style={{ color: '#9aa1ad' }}>—</span> },
     { title: 'Subject', dataIndex: 'subject', render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
-    { title: 'Deployed to', dataIndex: 'deployment_type', render: (v: string) => <Tag color="blue">{v}</Tag> },
+    { title: 'Deployed to', dataIndex: 'deployment_type', render: (v: string, d: any) => <span><Tag color="blue">{v}</Tag>{d.college ? <div style={{ fontSize: 11, color: '#69707d', marginTop: 2 }}>🎓 {d.college}</div> : null}</span> },
     { title: 'From', dataIndex: 'from_date', render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
     { title: 'To', dataIndex: 'to_date', render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
     { title: 'Days', width: 70, render: (_: any, d: any) => daysOf(d) },
-    { title: 'Details', dataIndex: 'details', render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: 'Remarks', dataIndex: 'details', render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
     { title: 'Status', dataIndex: 'status', width: 150, render: (v: string) => v === 'approved' ? <Tag color="green">Deployed</Tag> : v === 'pending' ? <Tag color="orange">Pending approval</Tag> : v === 'rejected' ? <Tag color="red">Rejected</Tag> : <Tag>Completed</Tag> },
     { title: '', width: 280, render: (_: any, d: any) => <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
       <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(d)} title="Edit deployment details">Edit</Button>
@@ -2813,7 +2828,12 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
       {d.status === 'approved' && <Button size="small" onClick={() => endDeployment(d)}>End</Button>}
     </span> },
   ]
-  const depShown = myDeps.filter((d: any) => (!ql || [nameById[d.mentor_id], empById[d.mentor_id], d.deployment_type, d.details, d.status].some((x: any) => String(x || '').toLowerCase().includes(ql))) && (!subjF.length || subjF.some((f: string) => subjKey(f) === subjKey(d.subject))))
+  const statusRank = (s: string) => s === 'completed' ? 1 : 0 // mentors who completed training sort to the end
+  const depShown = myDeps
+    .filter((d: any) => (!typeF || d.deployment_type === typeF)
+      && (!ql || [nameById[d.mentor_id], empById[d.mentor_id], d.deployment_type, d.college, d.details, d.status].some((x: any) => String(x || '').toLowerCase().includes(ql)))
+      && (!subjF.length || subjF.some((f: string) => subjKey(f) === subjKey(d.subject))))
+    .sort((a: any, b: any) => statusRank(a.status) - statusRank(b.status))
   const depSubjOpts = (() => { const m: Record<string, string> = {}; myDeps.forEach((d: any) => { const raw = String(d.subject || '').trim(); if (raw && !m[subjKey(raw)]) m[subjKey(raw)] = raw }); return Object.values(m).sort() })()
   // how many DISTINCT mentors are currently deployed (approved) under each deployment type.
   // A mentor with two approved deployments of the same type counts once; across types they count in each.
@@ -2825,26 +2845,62 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   const totalDeployed = activeDeployed.size
   const typeCards = <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
     <Col xs={12} md={8} lg={4}>
-      <Card hoverable onClick={() => setQ('')} styles={{ body: { padding: 14 } }} style={{ background: '#f7f8fb', borderColor: q === '' ? PRIMARY : undefined }}>
+      <Card hoverable onClick={() => setTypeF(null)} styles={{ body: { padding: 14 } }} style={{ background: '#f7f8fb', borderColor: typeF == null ? PRIMARY : undefined }}>
         <Statistic title={<span style={{ fontSize: 12, fontWeight: 700 }}>Total deployed<span style={{ fontSize: 10, color: '#9aa1ad', fontWeight: 400 }}> · all types</span></span>} value={totalDeployed} suffix={<span style={{ fontSize: 11, color: '#9aa1ad' }}>mentor{totalDeployed === 1 ? '' : 's'}</span>} valueStyle={{ color: PRIMARY, fontWeight: 800, fontSize: 22 }} />
       </Card>
     </Col>
     {DEPLOY_TYPES.map((t) => <Col xs={12} md={8} lg={4} key={t}>
-      <Card hoverable onClick={() => setQ(q === t ? '' : t)} styles={{ body: { padding: 14 } }} style={q === t ? { borderColor: DEPLOY_TYPE_COLOR[t], boxShadow: `0 0 0 1px ${DEPLOY_TYPE_COLOR[t]}` } : undefined}>
+      <Card hoverable onClick={() => setTypeF(typeF === t ? null : t)} styles={{ body: { padding: 14 } }} style={typeF === t ? { borderColor: DEPLOY_TYPE_COLOR[t], boxShadow: `0 0 0 1px ${DEPLOY_TYPE_COLOR[t]}` } : undefined}>
         <Statistic title={<span style={{ fontSize: 12 }}>{t}<span style={{ fontSize: 10, color: '#9aa1ad' }}> · tap to filter</span></span>} value={byType[t].size} suffix={<span style={{ fontSize: 11, color: '#9aa1ad' }}>mentor{byType[t].size === 1 ? '' : 's'}</span>} valueStyle={{ color: DEPLOY_TYPE_COLOR[t], fontWeight: 800, fontSize: 22 }} />
       </Card>
     </Col>)}
   </Row>
+  // College view: group by college first, then the mentors mapped to it (completed sort to the end).
+  const collegeGroups = (() => {
+    const g: Record<string, any[]> = {}
+    depShown.forEach((d: any) => { const c = String(d.college || '').trim() || '— College not specified —'; (g[c] = g[c] || []).push(d) })
+    return Object.keys(g).map((c) => {
+      const list = g[c]
+      const active = new Set(list.filter((d: any) => d.status === 'approved').map((d: any) => d.mentor_id)).size
+      return { college: c, list, underTraining: active > 0, active, mentorCount: new Set(list.map((d: any) => d.mentor_id)).size }
+    }).sort((a, b) => (Number(b.underTraining) - Number(a.underTraining)) || a.college.localeCompare(b.college)) // colleges under training first
+  })()
+  const collegeCols = [
+    { title: 'Sl No', width: 56, render: (_: any, r: any, i: number) => <span style={{ color: '#9aa1ad' }}>{r._sl ?? i + 1}</span> },
+    { title: 'Mentor', dataIndex: 'mentor_id', render: (v: string) => <span><b>{nameById[v] || '—'}</b>{NON_MENTOR_LABEL[roleById[v]] ? <Tag color="blue" style={{ marginLeft: 6 }}>{NON_MENTOR_LABEL[roleById[v]]}</Tag> : null}</span> },
+    { title: 'Employee ID', dataIndex: 'mentor_id', width: 110, render: (v: string) => empById[v] ? <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{empById[v]}</span> : <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: 'Subject', dataIndex: 'subject', render: (v: string) => v ? <Tag color="geekblue">{v}</Tag> : <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: 'From', dataIndex: 'from_date', render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
+    { title: 'To', dataIndex: 'to_date', render: (v: string) => v ? dayjs(v).format('DD MMM YYYY') : '—' },
+    { title: 'Days', width: 64, render: (_: any, d: any) => daysOf(d) },
+    { title: 'Status', dataIndex: 'status', width: 140, render: (v: string) => v === 'approved' ? <Tag color="green">Deployed</Tag> : v === 'pending' ? <Tag color="orange">Pending approval</Tag> : v === 'rejected' ? <Tag color="red">Rejected</Tag> : <Tag>Completed</Tag> },
+    { title: 'Remarks', dataIndex: 'details', render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
+    { title: '', width: 260, render: (_: any, d: any) => <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+      <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(d)}>Edit</Button>
+      {d.status === 'pending' && isManager && <><Button size="small" type="primary" onClick={() => decide(d, 'approved')}>Approve</Button><Button size="small" danger onClick={() => decide(d, 'rejected')}>Reject</Button></>}
+      {d.status === 'pending' && !isManager && <span style={{ fontSize: 12, color: '#d97706' }}>Awaiting Manager</span>}
+      {d.status === 'approved' && <Button size="small" onClick={() => endDeployment(d)}>End</Button>}
+    </span> },
+  ]
+  const collegeView = collegeGroups.length === 0
+    ? <Empty description={ql ? `No College deployments match “${q}”` : 'No College deployments yet.'} />
+    : <div>{collegeGroups.map((g) => (
+      <Card key={g.college} size="small" style={{ marginBottom: 12 }}
+        title={<span style={{ color: DEPLOY_TYPE_COLOR['College'], fontWeight: 700 }}>🎓 {g.college}</span>}
+        extra={<span style={{ display: 'inline-flex', gap: 8 }}>{g.underTraining ? <Tag color="green">Under training · {g.active}</Tag> : <Tag>Completed</Tag>}<Tag color="geekblue">{g.mentorCount} mentor{g.mentorCount === 1 ? '' : 's'}</Tag></span>}>
+        <Table size="small" rowKey="id" pagination={false} columns={collegeCols as any} dataSource={withSl(g.list)} scroll={{ x: 'max-content' }} />
+      </Card>
+    ))}</div>
   return <>{typeCards}
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-      <div style={{ fontSize: 12, color: '#69707d' }}>Counts show mentors <b>currently deployed</b> (Manager-approved) per type. Deployments need a Manager's prior approval before they go active.</div>
+      <div style={{ fontSize: 12, color: '#69707d' }}>Tap a widget above to show only that deployment type. Counts show mentors <b>currently deployed</b> (Manager-approved) per type.{typeF ? <> Showing <b>{typeF}</b> only.</> : null}</div>
       <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setForm({}); setAdd({ mentor_id: null }) }}>New deployment</Button>
     </div>
     <span style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
-      <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search name, employee ID, type, details, status…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 340 }} />
+      <Input allowClear prefix={<SearchOutlined style={{ color: '#9aa1ad' }} />} placeholder="Search name, employee ID, college, remarks…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 340 }} />
       <Select mode="multiple" allowClear showSearch maxTagCount="responsive" placeholder="Filter by subject(s)…" style={{ minWidth: 240 }} value={subjF} onChange={setSubjF} options={depSubjOpts.map((s) => ({ value: s, label: s }))} />
     </span>
-    <Table size="middle" rowKey="id" columns={cols as any} dataSource={withSl(depShown)} pagination={{ pageSize: 12 }}
+    {typeF === 'College' ? collegeView : <Table size="middle" rowKey="id" columns={cols as any} dataSource={withSl(depShown)} pagination={{ pageSize: 12 }}
       expandable={{
         rowExpandable: (d: any) => d.deployment_type === 'Online training',
         expandedRowRender: (d: any) => {
@@ -2872,7 +2928,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
           </div>
         },
       }}
-      locale={{ emptyText: <Empty description={ql ? `No deployments match “${q}”` : 'No deployments yet — deploy a mentor from the “Back to bench” tab or add one here.'} /> }} />
+      locale={{ emptyText: <Empty description={ql ? `No deployments match “${q}”` : 'No deployments yet — deploy a mentor from the “Back to bench” tab or add one here.'} /> }} />}
     {addModal}{feedbackModal}{batchModal}</>
 }
 
