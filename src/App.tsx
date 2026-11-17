@@ -2888,12 +2888,17 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   // regardless of the rest (e.g. CGC Landran / CGC Mohali → one "CGC").
   const COLLEGE_ALIASES: { name: string; matches: string[] }[] = [
     { name: 'CGC', matches: ['cgc', 'chandigarhgroup'] },
+    { name: 'Jaihind', matches: ['jaihind'] },
+    { name: 'Panimalar', matches: ['panimalar'] },
   ]
   const aliasOf = (raw: string) => { const n = normCollege(raw); return COLLEGE_ALIASES.find((a) => a.matches.some((m) => n.includes(m))) || null }
   const keyOf = (raw: string) => { const a = aliasOf(raw); return a ? 'alias:' + a.name : (normCollege(raw) || '__none') }
+  // A "College" deployment whose name is actually a Branch (e.g. "Punjagutta Branch")
+  // was mis-categorised — keep it out of the college trainings view.
+  const collegeDeps = depShown.filter((d: any) => !normCollege(collegeOf(d)).includes('branch'))
   const byCollege: Record<string, { name: string; forced: boolean; ongoing: any[]; completed: any[]; pending: any[] }> = {}
   const nameTally: Record<string, Record<string, number>> = {}
-  depShown.forEach((d: any) => {
+  collegeDeps.forEach((d: any) => {
     const raw = collegeOf(d); const a = aliasOf(raw); const k = keyOf(raw)
     const e = byCollege[k] || (byCollege[k] = { name: a ? a.name : raw, forced: !!a, ongoing: [], completed: [], pending: [] })
     if (!e.forced) { const t = nameTally[k] || (nameTally[k] = {}); t[raw] = (t[raw] || 0) + 1; if (t[raw] > (t[e.name] || 0)) e.name = raw } // most frequent spelling for non-aliased
@@ -2920,7 +2925,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
         : <Tree treeData={ongoingTree} defaultExpandAll selectable={false} showLine blockNode />}
     </Card>
     {(() => {
-      const hourRows = depShown.slice().sort((a: any, b: any) => collegeName(a).localeCompare(collegeName(b)) || String(nameById[a.mentor_id] || '').localeCompare(String(nameById[b.mentor_id] || '')))
+      const hourRows = collegeDeps.slice().sort((a: any, b: any) => collegeName(a).localeCompare(collegeName(b)) || String(nameById[a.mentor_id] || '').localeCompare(String(nameById[b.mentor_id] || '')))
       const totalHours = hourRows.reduce((s: number, d: any) => s + (Number(d.hours) || 0), 0)
       return <Card size="small" title="Hours trained by trainer" extra={<Tag color="gold">Total {totalHours}h</Tag>} style={{ marginBottom: 12 }}>
         {hourRows.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No college trainings yet." />
