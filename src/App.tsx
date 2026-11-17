@@ -2884,16 +2884,22 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   // differently (e.g. "ABC College" vs "abc  college") collapses into ONE, displayed
   // with its most-used spelling, and all its mentors/subjects sit under it.
   const normCollege = (s: string) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
-  const byCollege: Record<string, { name: string; ongoing: any[]; completed: any[]; pending: any[] }> = {}
+  // Alias rules: any college NAME matching a keyword collapses into one group,
+  // regardless of the rest (e.g. CGC Landran / CGC Mohali → one "CGC").
+  const COLLEGE_ALIASES: { name: string; matches: string[] }[] = [
+    { name: 'CGC', matches: ['cgc', 'chandigarhgroup'] },
+  ]
+  const aliasOf = (raw: string) => { const n = normCollege(raw); return COLLEGE_ALIASES.find((a) => a.matches.some((m) => n.includes(m))) || null }
+  const keyOf = (raw: string) => { const a = aliasOf(raw); return a ? 'alias:' + a.name : (normCollege(raw) || '__none') }
+  const byCollege: Record<string, { name: string; forced: boolean; ongoing: any[]; completed: any[]; pending: any[] }> = {}
   const nameTally: Record<string, Record<string, number>> = {}
   depShown.forEach((d: any) => {
-    const raw = collegeOf(d); const k = normCollege(raw) || '__none'
-    const e = byCollege[k] || (byCollege[k] = { name: raw, ongoing: [], completed: [], pending: [] })
-    const t = nameTally[k] || (nameTally[k] = {}); t[raw] = (t[raw] || 0) + 1
-    if (t[raw] > (t[e.name] || 0)) e.name = raw // display the most frequent spelling
+    const raw = collegeOf(d); const a = aliasOf(raw); const k = keyOf(raw)
+    const e = byCollege[k] || (byCollege[k] = { name: a ? a.name : raw, forced: !!a, ongoing: [], completed: [], pending: [] })
+    if (!e.forced) { const t = nameTally[k] || (nameTally[k] = {}); t[raw] = (t[raw] || 0) + 1; if (t[raw] > (t[e.name] || 0)) e.name = raw } // most frequent spelling for non-aliased
     ;(d.status === 'approved' ? e.ongoing : d.status === 'completed' ? e.completed : e.pending).push(d)
   })
-  const collegeName = (d: any) => byCollege[normCollege(collegeOf(d)) || '__none']?.name || collegeOf(d)
+  const collegeName = (d: any) => byCollege[keyOf(collegeOf(d))]?.name || collegeOf(d)
   const leafTitle = (d: any) => <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
     <span>{nameById[d.mentor_id] || '—'}{empById[d.mentor_id] ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad', marginLeft: 6 }}>{empById[d.mentor_id]}</span> : null}{d.subject ? <Tag color="geekblue" style={{ marginLeft: 6 }}>{d.subject}</Tag> : null}<span style={{ color: '#9aa1ad', fontSize: 12, marginLeft: 4 }}>{d.from_date ? dayjs(d.from_date).format('DD MMM') : '…'}{d.to_date ? '–' + dayjs(d.to_date).format('DD MMM') : ''} · {daysOf(d)}d</span>{d.hours != null ? <Tag color="gold" style={{ marginLeft: 6 }}>{d.hours}h</Tag> : null}{d.remarks ? <span style={{ color: '#69707d', fontSize: 12, marginLeft: 6 }}>· {d.remarks}</span> : null}</span>
     {d.status === 'approved' && <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex', gap: 6 }}>
