@@ -2673,17 +2673,20 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     <div style={lbl}>Deployed to</div>
     <Select style={{ width: '100%' }} placeholder="Branch / Online training / College / Corporate training" value={form.deployment_type} onChange={(v) => setForm((f: any) => ({ ...f, deployment_type: v }))} options={DEPLOY_TYPES.map(t => ({ value: t, label: t }))} />
     <Row gutter={8}><Col span={12}><div style={lbl}>From date</div><DatePicker style={{ width: '100%' }} value={form.from_date} onChange={(v) => setForm((f: any) => ({ ...f, from_date: v }))} /></Col><Col span={12}><div style={lbl}>To date</div><DatePicker style={{ width: '100%' }} value={form.to_date} onChange={(v) => setForm((f: any) => ({ ...f, to_date: v }))} /></Col></Row>
-    {(form.deployment_type === 'College' || form.deployment_type === 'College grooming') ? <>
-      <Row gutter={8}>
-        <Col span={14}><div style={lbl}>College name</div><Input placeholder="College name — groups this training" value={form.details || ''} onChange={(e) => setForm((f: any) => ({ ...f, details: e.target.value }))} /></Col>
-        <Col span={10}><div style={lbl}>Hours trained</div><Input type="number" min={0} placeholder="e.g. 40" value={form.hours ?? ''} onChange={(e) => setForm((f: any) => ({ ...f, hours: e.target.value }))} /></Col>
-      </Row>
-      <div style={lbl}>Remarks</div>
-      <Input.TextArea rows={2} placeholder="Remarks / notes about this college training…" value={form.remarks || ''} onChange={(e) => setForm((f: any) => ({ ...f, remarks: e.target.value }))} />
-    </> : <>
-      <div style={lbl}>Remarks</div>
-      <Input.TextArea rows={3} placeholder="Remarks / details (entered for the mentor)…" value={form.details || ''} onChange={(e) => setForm((f: any) => ({ ...f, details: e.target.value }))} />
-    </>}
+    {(() => {
+      const t = form.deployment_type
+      const isCollege = t === 'College' || t === 'College grooming'
+      const nameLabel = isCollege ? 'College name' : t === 'Branch' ? 'Branch name' : t === 'Corporate training' ? 'Company / Corporate name' : t === 'Online training' ? 'Batch code' : 'Details'
+      const namePh = isCollege ? 'College name — groups this training' : t === 'Branch' ? 'Branch name' : t === 'Corporate training' ? 'Company / Corporate name' : t === 'Online training' ? 'e.g. PY-ON-2026-04' : 'Details'
+      return <>
+        <Row gutter={8}>
+          <Col span={isCollege ? 14 : 24}><div style={lbl}>{nameLabel}</div><Input placeholder={namePh} value={form.details || ''} onChange={(e) => setForm((f: any) => ({ ...f, details: e.target.value }))} /></Col>
+          {isCollege && <Col span={10}><div style={lbl}>Hours trained</div><Input type="number" min={0} placeholder="e.g. 40" value={form.hours ?? ''} onChange={(e) => setForm((f: any) => ({ ...f, hours: e.target.value }))} /></Col>}
+        </Row>
+        <div style={lbl}>Remarks</div>
+        <Input.TextArea rows={2} placeholder="Remarks / notes…" value={form.remarks || ''} onChange={(e) => setForm((f: any) => ({ ...f, remarks: e.target.value }))} />
+      </>
+    })()}
     {form.deployment_type === 'Online training' && <div style={{ marginTop: 14, padding: '10px 12px', background: '#f7f8fb', border: '1px solid #eef0f3', borderRadius: 10, fontSize: 12, color: '#69707d' }}>
       <b>Online batches</b> are added per deployment — save this, then <b>expand the row</b> on the Deployed tab to add one or more batches (a mentor can run several batches on the same date with different codes / time slots).
     </div>}
@@ -2890,6 +2893,9 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     { name: 'CGC', matches: ['cgc', 'chandigarhgroup'] },
     { name: 'Jaihind', matches: ['jaihind'] },
     { name: 'Panimalar', matches: ['panimalar'] },
+    { name: 'BNMIT', matches: ['bnmit'] },
+    { name: 'SVCE', matches: ['svce'] },
+    { name: 'Devanahalli', matches: ['devanahalli'] },
   ]
   const aliasOf = (raw: string) => { const n = normCollege(raw); return COLLEGE_ALIASES.find((a) => a.matches.some((m) => n.includes(m))) || null }
   const keyOf = (raw: string) => { const a = aliasOf(raw); return a ? 'alias:' + a.name : (normCollege(raw) || '__none') }
@@ -2905,26 +2911,37 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     ;(d.status === 'approved' ? e.ongoing : d.status === 'completed' ? e.completed : e.pending).push(d)
   })
   const collegeName = (d: any) => byCollege[keyOf(collegeOf(d))]?.name || collegeOf(d)
-  const leafTitle = (d: any) => <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-    <span>{nameById[d.mentor_id] || '—'}{empById[d.mentor_id] ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad', marginLeft: 6 }}>{empById[d.mentor_id]}</span> : null}{d.subject ? <Tag color="geekblue" style={{ marginLeft: 6 }}>{d.subject}</Tag> : null}<span style={{ color: '#9aa1ad', fontSize: 12, marginLeft: 4 }}>{d.from_date ? dayjs(d.from_date).format('DD MMM') : '…'}{d.to_date ? '–' + dayjs(d.to_date).format('DD MMM') : ''} · {daysOf(d)}d</span>{d.hours != null ? <Tag color="gold" style={{ marginLeft: 6 }}>{d.hours}h</Tag> : null}{d.remarks ? <span style={{ color: '#69707d', fontSize: 12, marginLeft: 6 }}>· {d.remarks}</span> : null}</span>
-    {d.status === 'approved' && <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex', gap: 6 }}>
-      <Button size="small" icon={<EditOutlined />} onClick={() => openEdit(d)} title="Edit details" />
-      <Popconfirm title="End this college training?" okText="End" onConfirm={() => endDeployment(d)}><Button size="small">End training</Button></Popconfirm>
-    </span>}
-  </span>
+  const perDayHours = (d: any) => { const days = (d.from_date && d.to_date) ? dayjs(d.to_date).diff(dayjs(d.from_date), 'day') + 1 : 0; return (d.hours != null && days > 0) ? Number(d.hours) / days : null }
+  const leafTitle = (d: any) => {
+    const pd = perDayHours(d); const low = pd != null && pd < 9
+    const openTasks = (itByMentor[d.mentor_id] || []).filter((t: any) => t.status !== 'done')
+    return <span className={low ? 'tk-blink' : undefined} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', color: low ? '#dc2626' : undefined, fontWeight: low ? 700 : undefined }}>
+      <span>{nameById[d.mentor_id] || '—'}{empById[d.mentor_id] ? <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#9aa1ad', marginLeft: 6 }}>{empById[d.mentor_id]}</span> : null}{d.subject ? <Tag color="geekblue" style={{ marginLeft: 6 }}>{d.subject}</Tag> : null}<span style={{ color: low ? '#dc2626' : '#9aa1ad', fontSize: 12, marginLeft: 4 }}>{d.from_date ? dayjs(d.from_date).format('DD MMM') : '…'}{d.to_date ? '–' + dayjs(d.to_date).format('DD MMM') : ''} · {daysOf(d)}d</span></span>
+      {d.hours != null ? <Tag color="gold" style={{ margin: 0 }}>{d.hours}h</Tag> : null}
+      {pd != null ? <Tag color={low ? 'red' : 'green'} style={{ margin: 0 }}>{pd.toFixed(1)}h/day</Tag> : null}
+      {d.remarks ? <span style={{ color: low ? '#dc2626' : '#69707d', fontSize: 12 }}>· {d.remarks}</span> : null}
+      {openTasks.length > 0 ? <Tag color="volcano" style={{ margin: 0 }}>📋 {openTasks.map((t: any) => t.task).join(', ')}</Tag> : null}
+      <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex', gap: 6 }}>
+        {low && <Button size="small" danger onClick={() => openInternalTask({ id: d.mentor_id, full_name: nameById[d.mentor_id] })}>Assign task</Button>}
+        {d.status === 'approved' && <><Button size="small" icon={<EditOutlined />} onClick={() => openEdit(d)} title="Edit details" />
+          <Popconfirm title="End this college training?" okText="End" onConfirm={() => endDeployment(d)}><Button size="small">End training</Button></Popconfirm></>}
+      </span>
+    </span>
+  }
   const sumHours = (list: any[]) => list.reduce((s: number, d: any) => s + (Number(d.hours) || 0), 0)
   // Hours are CUMULATIVE per college — all its trainings (ongoing + completed + pending),
   // so completed hours keep reflecting and a resumed/new training adds on top.
   const totalHoursOf = (k: string) => sumHours([...byCollege[k].ongoing, ...byCollege[k].completed, ...byCollege[k].pending])
-  const toTree = (pick: 'ongoing' | 'completed') => Object.keys(byCollege).filter((k) => byCollege[k][pick].length).sort((a, b) => byCollege[a].name.localeCompare(byCollege[b].name)).map((k, ci) => {
-    const h = totalHoursOf(k)
-    return {
-      key: pick + ci, selectable: false,
-      title: <span style={{ fontWeight: 700 }}><span style={{ color: '#9aa1ad', marginRight: 4 }}>{ci + 1}.</span>🎓 {byCollege[k].name} <Tag color={pick === 'ongoing' ? 'green' : 'default'} style={{ marginLeft: 4 }}>{byCollege[k][pick].length}</Tag>{h > 0 ? <Tag color="gold">{h}h trained (total)</Tag> : null}</span>,
-      children: byCollege[k][pick].map((d: any, mi: number) => ({ key: d.id, isLeaf: true, title: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ color: '#9aa1ad' }}>{mi + 1}.</span>{leafTitle(d)}</span> })),
-    }
-  })
-  const ongoingTree = toTree('ongoing'); const completedTree = toTree('completed')
+  const leafNode = (d: any, mi: number) => ({ key: d.id, isLeaf: true, title: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ color: '#9aa1ad' }}>{mi + 1}.</span>{leafTitle(d)}</span> })
+  // One tree per college, each with Ongoing + Completed sub-groups (collapsed by default).
+  const collegeTreeData = Object.keys(byCollege).filter((k) => byCollege[k].ongoing.length || byCollege[k].completed.length)
+    .sort((a, b) => byCollege[a].name.localeCompare(byCollege[b].name)).map((k, ci) => {
+      const h = totalHoursOf(k); const onH = sumHours(byCollege[k].ongoing); const coH = sumHours(byCollege[k].completed)
+      const sub: any[] = []
+      if (byCollege[k].ongoing.length) sub.push({ key: 'on' + k, selectable: false, title: <span><Tag color="green" style={{ margin: 0 }}>Ongoing · {byCollege[k].ongoing.length}</Tag>{onH > 0 ? <Tag color="gold" style={{ marginLeft: 6 }}>{onH}h</Tag> : null}</span>, children: byCollege[k].ongoing.map(leafNode) })
+      if (byCollege[k].completed.length) sub.push({ key: 'co' + k, selectable: false, title: <span><Tag style={{ margin: 0 }}>Completed · {byCollege[k].completed.length}</Tag>{coH > 0 ? <Tag color="gold" style={{ marginLeft: 6 }}>{coH}h</Tag> : null}</span>, children: byCollege[k].completed.map(leafNode) })
+      return { key: 'col' + ci, selectable: false, title: <span style={{ fontWeight: 700 }}><span style={{ color: '#9aa1ad', marginRight: 4 }}>{ci + 1}.</span>🎓 {byCollege[k].name}{h > 0 ? <Tag color="gold" style={{ marginLeft: 6 }}>{h}h trained (total)</Tag> : null}</span>, children: sub }
+    })
   const statusLabel = (s: string) => s === 'approved' ? 'Deployed (ongoing)' : s === 'completed' ? 'Completed' : s === 'pending' ? 'Pending approval' : s === 'rejected' ? 'Rejected' : s
   const downloadCollegeReport = () => {
     const detail = collegeDeps.slice()
@@ -2941,13 +2958,15 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     XLSX.writeFile(wb, `Trackademy_college_report_${dayjs().format('YYYY-MM-DD')}.xlsx`)
   }
   const collegeView = <div>
-    <Card size="small" title="Ongoing college trainings" style={{ marginBottom: 12 }}
+    <style>{`@keyframes tkblink{0%,100%{opacity:1}50%{opacity:.3}} .tk-blink{animation:tkblink 1s steps(1,end) infinite}`}</style>
+    <Card size="small" title="College trainings" style={{ marginBottom: 12 }}
       extra={<span style={{ display: 'inline-flex', gap: 8 }}>
         <Button size="small" icon={<DownloadOutlined />} onClick={downloadCollegeReport} disabled={collegeDeps.length === 0}>Download college report</Button>
         <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setUpForm({}); setUpModal(true) }}>Add upcoming college</Button>
       </span>}>
-      {ongoingTree.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No ongoing college trainings. Deploy a mentor to a college (enter the college name in Remarks)." />
-        : <Tree treeData={ongoingTree} defaultExpandAll selectable={false} showLine blockNode />}
+      <div style={{ fontSize: 12, color: '#69707d', marginBottom: 8 }}>Expand a college to see its <b>Ongoing</b> and <b>Completed</b> trainings. Mentors training <b>&lt; 9h/day</b> blink red — assign them a task.</div>
+      {collegeTreeData.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No college trainings. Deploy a mentor to a college (enter the college name)." />
+        : <Tree treeData={collegeTreeData} selectable={false} showLine blockNode />}
     </Card>
     <Card size="small" title="Upcoming college trainings" style={{ marginBottom: 12 }}
       extra={<Button size="small" icon={<PlusOutlined />} onClick={() => { setUpForm({}); setUpModal(true) }}>Add college</Button>}>
@@ -2960,9 +2979,6 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
           { title: '', width: 70, render: (_: any, r: any) => <Popconfirm title="Remove this upcoming college?" okText="Remove" okButtonProps={{ danger: true }} onConfirm={() => deleteUpcoming(r.id)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm> },
         ] as any} />}
     </Card>
-    {completedTree.length > 0 && <Card size="small" title="Completed college trainings" style={{ marginBottom: 12 }}>
-      <Tree treeData={completedTree} selectable={false} showLine blockNode />
-    </Card>}
   </div>
   const upModalEl = <Modal open={upModal} title="Add upcoming college training" okText="Add" onOk={addUpcoming} onCancel={() => { setUpModal(false); setUpForm({}) }} destroyOnClose>
     <div style={lbl}>College name</div>
