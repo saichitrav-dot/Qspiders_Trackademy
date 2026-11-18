@@ -2935,7 +2935,8 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
   const leafNode = (d: any, mi: number) => ({ key: d.id, isLeaf: true, title: <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ color: '#9aa1ad' }}>{mi + 1}.</span>{leafTitle(d)}</span> })
   // One tree per college, each with Ongoing + Completed sub-groups (collapsed by default).
   const collegeTreeData = Object.keys(byCollege).filter((k) => byCollege[k].ongoing.length || byCollege[k].completed.length)
-    .sort((a, b) => byCollege[a].name.localeCompare(byCollege[b].name)).map((k, ci) => {
+    .sort((a, b) => (Number(byCollege[b].ongoing.length > 0) - Number(byCollege[a].ongoing.length > 0)) || byCollege[a].name.localeCompare(byCollege[b].name)) // colleges with ongoing trainings first
+    .map((k, ci) => {
       const h = totalHoursOf(k); const onH = sumHours(byCollege[k].ongoing); const coH = sumHours(byCollege[k].completed)
       const sub: any[] = []
       if (byCollege[k].ongoing.length) sub.push({ key: 'on' + k, selectable: false, title: <span><Tag color="green" style={{ margin: 0 }}>Ongoing · {byCollege[k].ongoing.length}</Tag>{onH > 0 ? <Tag color="gold" style={{ marginLeft: 6 }}>{onH}h</Tag> : null}</span>, children: byCollege[k].ongoing.map(leafNode) })
