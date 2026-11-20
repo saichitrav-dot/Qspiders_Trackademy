@@ -2950,7 +2950,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
       .map((d: any, i: number) => ({ 'Sl No': i + 1, College: collegeName(d), 'College (as entered)': String(d.details || '').trim(), Trainer: nameById[d.mentor_id] || '', 'Employee ID': empById[d.mentor_id] || '', Role: NON_MENTOR_LABEL[roleById[d.mentor_id]] || 'Mentor', Subject: d.subject || '', 'Deployment type': d.deployment_type || '', 'From': d.from_date ? dayjs(d.from_date).format('DD MMM YYYY') : '', 'To': d.to_date ? dayjs(d.to_date).format('DD MMM YYYY') : '', Days: daysOf(d), Hours: d.hours != null ? Number(d.hours) : '', Status: statusLabel(d.status), Remarks: d.remarks || '' }))
     const sumMap: Record<string, { College: string; trainers: Set<string>; subjects: Set<string>; Ongoing: number; Completed: number; Hours: number }> = {}
     collegeDeps.forEach((d: any) => { const c = collegeName(d); const e = sumMap[c] || (sumMap[c] = { College: c, trainers: new Set(), subjects: new Set(), Ongoing: 0, Completed: 0, Hours: 0 }); e.trainers.add(d.mentor_id); if (d.subject) e.subjects.add(d.subject); if (d.status === 'approved') e.Ongoing++; if (d.status === 'completed') e.Completed++; e.Hours += Number(d.hours) || 0 })
-    const summary = Object.values(sumMap).map((e, i) => ({ 'Sl No': i + 1, College: e.College, Trainers: e.trainers.size, Subjects: [...e.subjects].join(', '), 'Ongoing': e.Ongoing, 'Completed': e.Completed, 'Total hours': e.Hours })).sort((a, b) => a.College.localeCompare(b.College))
+    const summary = Object.values(sumMap).map((e, i) => ({ 'Sl No': i + 1, College: e.College, 'Trainers': e.trainers.size, Subjects: [...e.subjects].join(', '), 'Ongoing trainings': e.Ongoing, 'Completed trainings': e.Completed, 'Total hours': e.Hours })).sort((a, b) => a.College.localeCompare(b.College))
     const upc = (upcoming || []).map((u: any, i: number) => ({ 'Sl No': i + 1, College: u.college || '', 'Expected date': u.expected_date ? dayjs(u.expected_date).format('DD MMM YYYY') : '', Note: u.note || '' }))
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), 'By college')
@@ -2967,9 +2967,6 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
       <div style={{ fontSize: 12, color: '#69707d', marginBottom: 8 }}>Expand a college to see its mentor details. Mentors training <b>&lt; 9h/day</b> are shown in red — assign them a task.</div>
       {sectionCollapse('ongoing')}
     </Card>
-    <Card size="small" title="Completed college trainings" style={{ marginBottom: 12 }}>
-      {sectionCollapse('completed')}
-    </Card>
     <Card size="small" title="Upcoming college trainings" style={{ marginBottom: 12 }}
       extra={<Button size="small" icon={<PlusOutlined />} onClick={() => { setUpForm({}); setUpModal(true) }}>Add college</Button>}>
       {upcoming.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No upcoming colleges yet — add a college name to track it." />
@@ -2980,6 +2977,9 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
           { title: 'Note', dataIndex: 'note', render: (v: string) => v || <span style={{ color: '#9aa1ad' }}>—</span> },
           { title: '', width: 70, render: (_: any, r: any) => <Popconfirm title="Remove this upcoming college?" okText="Remove" okButtonProps={{ danger: true }} onConfirm={() => deleteUpcoming(r.id)}><Button size="small" type="text" danger icon={<DeleteOutlined />} /></Popconfirm> },
         ] as any} />}
+    </Card>
+    <Card size="small" title="Completed college trainings" style={{ marginBottom: 12 }}>
+      {sectionCollapse('completed')}
     </Card>
   </div>
   const upModalEl = <Modal open={upModal} title="Add upcoming college training" okText="Add" onOk={addUpcoming} onCancel={() => { setUpModal(false); setUpForm({}) }} destroyOnClose>
@@ -3028,7 +3028,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
         },
       }}
       locale={{ emptyText: <Empty description={ql ? `No deployments match “${q}”` : 'No deployments yet — deploy a mentor from the “Back to bench” tab or add one here.'} /> }} />}
-    {addModal}{feedbackModal}{batchModal}{upModalEl}</>
+    {addModal}{feedbackModal}{batchModal}{upModalEl}{internalTaskModal}</>
 }
 
 // v34: derive a mentor's live "bucket". Deployed / bench come from mentor_deployment;
