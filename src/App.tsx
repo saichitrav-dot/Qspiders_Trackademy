@@ -2896,6 +2896,7 @@ function MentorDeployments({ mentors, trainers = [], mode, subjectOf = {} }: any
     { name: 'BNMIT', matches: ['bnmit'] },
     { name: 'SVCE', matches: ['svce'] },
     { name: 'Devanahalli', matches: ['devanahalli'] },
+    { name: 'Canara', matches: ['canara'] },
   ]
   const aliasOf = (raw: string) => { const n = normCollege(raw); return COLLEGE_ALIASES.find((a) => a.matches.some((m) => n.includes(m))) || null }
   const keyOf = (raw: string) => { const a = aliasOf(raw); return a ? 'alias:' + a.name : (normCollege(raw) || '__none') }
